@@ -34,10 +34,16 @@ def placeholder(orig_tokens):
     """Keep only control/insert tokens (drop Japanese text) so flow is preserved."""
     return [t for t in orig_tokens if t[1]]
 
-# ---- C/D bank locations (bank -> (buffer_name, base, alloc_bytes)) ----
+# ---- C/D bank locations (bank -> (buffer_name, STOCK base, alloc_bytes)) ----
 # PACKA banks 0-3 ; exe banks 6,7. Allocations: PACKA from file table; exe from layout.
+#
+# UNUSED -- build.py owns the live bank table; this records the STOCK layout only.
+# Do NOT size an exe bank as "next known symbol - base": bank 7's block ends at exactly
+# 0x801171d8, where a live bitmask table begins, so the apparent gap up to the file-ID
+# table at 0x80117cc8 is NOT free.  build.py relocates bank 7 into the rodata cave and
+# documents the real boundaries; see BANK6_LIMIT / BANK7_CAVE there.
 CD_BANKS = {
  0:("packa",0x32fb000,15*2048), 1:("packa",0x3302800,2*2048),
  2:("packa",0x3303800,16*2048), 3:("packa",0x330b800,13*2048),
- 6:("exe",0x80115bd8,None), 7:("exe",0x80116f2c,None),
+ 6:("exe",0x80115bd8,4948), 7:("exe",0x80116f2c,684),
 }
