@@ -23,6 +23,31 @@ import pyxdelta
 
 CMDINIT_SECTOR = 67152                        # CMDINIT.BIN base sector in the bin
 RDLOGO_SECTOR = 67181                         # RDLOGO.BIN base sector in the bin
+
+# ---- Static exe dialogue banks 6/7 -------------------------------------------------
+# Banks 6 and 7 are NOT loaded from disc; they are static data inside the exe and are
+# addressed only by the seek routine 0x80056a20, which materializes each base in two
+# instructions (an addiu for the block base and an lhu for its data_off u16).
+#
+# The gap after a bank is NOT free space.  Bank 7's block ends at exactly 0x801171d8,
+# where a 16-entry bitmask table begins (read by 0x8005d23c / 0x8005d62c); ~107 further
+# structures are referenced between there and the file-ID table at 0x80117cc8.  Sizing
+# bank 7 as "0x80117cc8 - base" therefore overruns live data -- the same class of bug as
+# the NPC name table overflowing into the demon battle data.  A reference scan over the
+# exe, every overlay, PACKA and ZZZZZZZZ.ZZZ finds only the 4 seek-routine sites below,
+# so [BANK6_BASE, BANK6_LIMIT) belongs exclusively to banks 6+7 -- and nothing else.
+#
+# English needs more than the 5632 B those two banks share, so bank 7 (the smaller) is
+# moved into the rodata font-placeholder cave, giving bank 6 the whole native region.
+BANK6_BASE = 0x80115bd8
+BANK6_LIMIT = 0x801171d8          # first foreign data (bitmask table) -- hard ceiling
+BANK7_JP_BASE = 0x80116f2c        # stock bank 7 base (source only; block is 684 B)
+BANK7_CAVE = 0x800d8500           # free tofu run: 0x800d8500..0x800d9144 (3140 B)
+BANK7_CAVE_END = 0x800d9144
+# Seek-routine sites that materialize bank 7's base (all share one lui).
+SEEK_B7_LUI = 0x80056b50          # lui   $a0, 0x8011
+SEEK_B7_ADDIU = 0x80056b54        # addiu $a3, $a0, 0x6f2c
+SEEK_B7_LHU = 0x80056b70          # lhu   $v1, 0x6f2c($a0)
 DEFAULT_BIN_NAME = "Shin Megami Tensei II (Japan) (Rev 1).bin"
 EXPECTED_BIN_SIZE = 222_694_416
 OUT_BIN = "build/SMT2_EN.bin"
@@ -126,7 +151,34 @@ def build_exe(font_slpm, widths, slpm):
     # each byte to the corresponding existing fullwidth SJIS glyph before calling the stock blit,
     # so they retain this same VWF/font while unmarked Japanese remains on the stock path.
     _install_sys_printer(exe, w32)
+    _relocate_bank7_base(exe, w32)
     return exe
+
+def _relocate_bank7_base(exe, w32):
+    """Repoint dialogue bank 7 from 0x80116f2c into the rodata cave.
+
+    Frees bank 7's native 684 B so bank 6 can use the whole [BANK6_BASE, BANK6_LIMIT)
+    region.  Only three instructions reference the base, and all three share one lui,
+    so the register keeps a consistent value:
+
+        lui   $a0, hi      ; hi/lo split of BANK7_CAVE
+        addiu $a3, $a0, lo ; block base
+        lhu   $v1, lo($a0) ; data_off u16 at block[0]
+
+    $a0 is dead immediately after (overwritten at 0x80056b7c), so re-using it is safe.
+    """
+    hi = (BANK7_CAVE >> 16) + (1 if BANK7_CAVE & 0x8000 else 0)   # addiu/lhu sign-extend
+    lo = BANK7_CAVE & 0xffff
+    # Verify the stock instructions are exactly what we expect before rewriting them.
+    for addr, expect in ((SEEK_B7_LUI, 0x3c048011),      # lui   $a0, 0x8011
+                         (SEEK_B7_ADDIU, 0x24876f2c),    # addiu $a3, $a0, 0x6f2c
+                         (SEEK_B7_LHU, 0x94836f2c)):     # lhu   $v1, 0x6f2c($a0)
+        got = struct.unpack_from("<I", exe, foff(addr))[0]
+        if got != expect:
+            raise SystemExit(f"bank7 seek site {addr:#x}: expected {expect:#010x}, got {got:#010x}")
+    w32(SEEK_B7_LUI,   0x3c040000 | hi)                  # lui   $a0, hi
+    w32(SEEK_B7_ADDIU, 0x24870000 | lo)                  # addiu $a3, $a0, lo
+    w32(SEEK_B7_LHU,   0x94830000 | lo)                  # lhu   $v1, lo($a0)
 
 def _apply_lowercase_font(exe):
     """Draw lowercase a-z into the 8x10 halfwidth font's a-z glyph slots (idx 0x41-0x5a).
@@ -275,7 +327,13 @@ def apply_banks(exe, packa, slpm, PATHS):
     """
     ED=(0x4544,True)
     def U16(a): return struct.unpack_from("<H", exe, foff(a))[0]
-    alloc6=0x80116f2c-0x80115bd8; alloc7=0x80117cc8-0x80116f2c
+    # Source allocations only bound the JP decode (blocks self-terminate, so a generous
+    # bound is harmless).  Destination allocations are the TRUE limits -- see the
+    # BANK6_LIMIT / BANK7_CAVE notes at the top of this file.
+    src_alloc6=BANK7_JP_BASE-BANK6_BASE            # 4948: stock bank 6 region
+    src_alloc7=0x80117cc8-BANK7_JP_BASE            # 3484: bounds the decode only
+    dst_alloc6=BANK6_LIMIT-BANK6_BASE              # 5632: bank 6 owns the whole region
+    dst_alloc7=BANK7_CAVE_END-BANK7_CAVE           # 3140: free rodata cave
     source_packa=bytes(packa)
     packa=bytearray(packa)
 
@@ -285,8 +343,8 @@ def apply_banks(exe, packa, slpm, PATHS):
         1:("packa",0x3302800, 2*2048,0x3302800, 2*2048),
         2:("packa",0x3303800,16*2048,0x3303800,16*2048),
         3:("packa",0x330b800,13*2048,0x330b800,13*2048),
-        6:("exe",0x80115bd8,alloc6,0x80115bd8,alloc6),
-        7:("exe",0x80116f2c,alloc7,0x80116f2c,alloc7),
+        6:("exe",BANK6_BASE,src_alloc6,BANK6_BASE,dst_alloc6),
+        7:("exe",BANK7_JP_BASE,src_alloc7,BANK7_CAVE,dst_alloc7),
     }
     def build_block(msgs,N):
         # Offset entries may safely share an identical self-terminating stream.
