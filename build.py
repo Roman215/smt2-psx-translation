@@ -270,20 +270,33 @@ CD_BANKS = None
 def apply_banks(exe, packa, slpm, PATHS):
     """Rebuild C/D dialogue banks with TR.TRANS (translated) + placeholders.
 
-    Bank 2's natural English script is larger than its original 16-sector file.
-    Bank 3 currently needs only three sectors, so move its PACKA boundary four
-    sectors later.  Both rebuilt files still remain inside their original combined
-    0x3303800..0x3312000 region; no following PACKA resource is displaced.
+    Natural English makes Banks 2 and 3 larger than their original entries.  PACKA
+    is the final ISO file and is followed by blank data sectors, so extend it seven
+    sectors, shift every entry after Bank 3 by the same amount, and keep the archive
+    table and ISO directory in sync.  The BIN's overall sector count is unchanged.
     """
     ED=(0x4544,True)
     def U16(a): return struct.unpack_from("<H", exe, foff(a))[0]
     alloc6=0x80116f2c-0x80115bd8; alloc7=0x80117cc8-0x80116f2c
+    # Bank 3 ends seven sectors beyond the original following-entry boundary.
+    # Preserve an immutable source image for decoding, then make room by shifting
+    # the entire PACKA tail from sector 0x6624 onward.
+    source_packa=bytes(packa)
+    tail_sector=0x6624
+    tail_shift_sectors=7
+    tail_fo=tail_sector*2048
+    tail_shift=tail_shift_sectors*2048
+    packa=bytearray(len(source_packa)+tail_shift)
+    packa[:tail_fo]=source_packa[:tail_fo]
+    packa[tail_fo:tail_fo+tail_shift]=b"\xCC"*tail_shift
+    packa[tail_fo+tail_shift:]=source_packa[tail_fo:]
+
     # bank: (buffer, source base, source allocation, destination base, destination allocation)
     banks={
         0:("packa",0x32fb000,15*2048,0x32fb000,15*2048),
         1:("packa",0x3302800, 2*2048,0x3302800, 2*2048),
         2:("packa",0x3303800,16*2048,0x3303800,20*2048),
-        3:("packa",0x330b800,13*2048,0x330d800, 9*2048),
+        3:("packa",0x330b800,13*2048,0x330d800,16*2048),
         6:("exe",0x80115bd8,alloc6,0x80115bd8,alloc6),
         7:("exe",0x80116f2c,alloc7,0x80116f2c,alloc7),
     }
@@ -299,8 +312,6 @@ def apply_banks(exe, packa, slpm, PATHS):
             if not hi: data.append(b)
         do=2+2*N; out=bytearray(struct.pack("<H",do)); out+=struct.pack("<%dH"%N,*offs); out+=data
         return bytes(out)
-    source_packa=bytes(packa)
-    packa=bytearray(packa)
     for bank,(buf,src_base,src_alloc,dst_base,dst_alloc) in banks.items():
         src_fo=src_base if buf=="packa" else foff(src_base)
         dst_fo=dst_base if buf=="packa" else foff(dst_base)
@@ -320,11 +331,16 @@ def apply_banks(exe, packa, slpm, PATHS):
         else:
             exe[dst_fo:dst_fo+len(blk)]=blk
 
-    # PACKA's entry-start table: Bank 3 moves from sector 0x6617 to 0x661B.
-    # The next entry remains at 0x6624, leaving Bank 3 nine sectors.
+    # PACKA's entry-start table: Bank 3 moves from 0x6617 to 0x661B, and
+    # every following start (including the final 0x66E6 end marker) moves +7.
     if struct.unpack_from("<H",slpm,0xda190)[0] != 0x6617:
         raise SystemExit("unexpected PACKA Bank 3 sector-table entry")
     struct.pack_into("<H",exe,0xda190,0x661b)
+    for off in range(0xda192,0xda1e0,2):
+        old=struct.unpack_from("<H",slpm,off)[0]
+        if not 0x6624 <= old <= 0x66e6:
+            raise SystemExit(f"unexpected PACKA tail sector-table entry {old:#x} at {off:#x}")
+        struct.pack_into("<H",exe,off,old+tail_shift_sectors)
     return packa
 
 # ============================ 5. PATCH + XDELTA ============================
@@ -337,14 +353,51 @@ def make_patch(input_bin, exe, packa, slpm, packa0, cmdinit=None, cmdinit0=None,
     edits=[]
     for i in range(len(slpm)):
         if slpm[i]!=exe[i]: edits.append((em(i),exe[i]))
-    for i in range(len(packa0)):
-        if packa0[i]!=packa[i]: edits.append((pm(i),packa[i]))
+    if len(packa)%2048 or len(packa)<len(packa0):
+        raise SystemExit("rebuilt PACKA has an invalid size")
+    for i in range(len(packa)):
+        old=packa0[i] if i<len(packa0) else bind[pm(i)]
+        if old!=packa[i]: edits.append((pm(i),packa[i]))
     if cmdinit is not None:
         for i in range(len(cmdinit0)):
             if cmdinit0[i]!=cmdinit[i]: edits.append((cm(i),cmdinit[i]))
     if rdlogo is not None:
         for i in range(len(rdlogo0)):
             if rdlogo0[i]!=rdlogo[i]: edits.append((rm(i),rdlogo[i]))
+
+    if len(packa)!=len(packa0):
+        # PACKA.BIN is the last ISO file.  Update its directory-record size in
+        # both byte orders while retaining its original extent.
+        dir_lba=66991
+        user=dir_lba*2352+24
+        data=bind[user:user+2048]
+        pos=0; record=None
+        while pos<len(data):
+            n=data[pos]
+            if not n: break
+            rec=data[pos:pos+n]
+            name_len=rec[32] if len(rec)>32 else 0
+            if rec[33:33+name_len]==b"PACKA.BIN;1":
+                record=user+pos; break
+            pos+=n
+        if record is None:
+            raise SystemExit("could not find PACKA.BIN ISO directory record")
+        if (struct.unpack_from("<I",bind,record+2)[0]!=68191 or
+            struct.unpack_from("<I",bind,record+10)[0]!=len(packa0) or
+            struct.unpack_from(">I",bind,record+14)[0]!=len(packa0)):
+            raise SystemExit("unexpected PACKA.BIN ISO directory record")
+        size_fields=struct.pack("<I",len(packa))+struct.pack(">I",len(packa))
+        for i,v in enumerate(size_fields): edits.append((record+10+i,v))
+
+        # The original final sector carries the Mode 2 EOF/EOR submode.  Move
+        # that marker to the expanded final sector and mark intervening sectors
+        # as ordinary Form 1 data before regenerating EDC/ECC below.
+        old_sectors=len(packa0)//2048; new_sectors=len(packa)//2048
+        for rel in range(old_sectors-1,new_sectors):
+            sec=68191+rel
+            submode=0x89 if rel==new_sectors-1 else 0x08
+            subheader=bytes((0,0,submode,0))*2
+            for i,v in enumerate(subheader): edits.append((sec*2352+16+i,v))
     aff=set()
     for bo,v in edits: bind[bo]=v; aff.add(bo//2352)
     for sec in aff:
