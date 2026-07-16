@@ -17,7 +17,7 @@ from pathlib import Path
 sys.path.insert(0, "tools")
 import build_en_tree as ET, block_rebuild as BR, build_prod_exe as BP, translate_pipeline as TP
 import name_tables as NT, translations as TR, menu_table as MT, sys_strings as SS
-import rdlogo as RD, map_names as MN
+import rdlogo as RD, map_names as MN, status_screen as STATUS
 from cdecc import fix_mode2form1
 import pyxdelta
 
@@ -69,10 +69,11 @@ def kern_font(slpm):
 
 # ============================ 2. BUILD EXE ============================
 def build_exe(font_slpm, widths, slpm):
-    """VWF advance hook + width table + English-only C/D tree. Returns exe bytearray."""
+    """VWF advance hooks + width table + English-only C/D tree. Returns exe bytearray."""
     exe = bytearray(font_slpm)
     def w32(a, v): struct.pack_into("<I", exe, foff(a), v)
-    CAVE, WTABLE, BACK = 0x800d7254, 0x800d7300, 0x80048b88
+    CAVE, RAW_CAVE, WTABLE = 0x800d7254, 0x800d7294, 0x800d7300
+    BACK, RAW_BACK = 0x80048b88, 0x80048284
     R = {'zero':0,'v1':3,'a0':4,'a2':6,'t6':14,'t7':15,'t8':24,'t9':25,'sp':29}
     I = lambda op,rs,rt,imm: ((op&0x3f)<<26)|((R[rs]&0x1f)<<21)|((R[rt]&0x1f)<<16)|(imm&0xffff)
     Rr = lambda rs,rt,rd,sa,fn: ((R[rs]&0x1f)<<21)|((R[rt]&0x1f)<<16)|((R[rd]&0x1f)<<11)|((sa&0x1f)<<6)|(fn&0x3f)
@@ -89,6 +90,18 @@ def build_exe(font_slpm, widths, slpm):
     ID=len(hook); hook+=[lhu('v1',0,'a2'),jj(BACK),0]
     hook[IB]=beq('t8','zero',((CAVE+ID*4)-((CAVE+IB*4)+4))>>2)
     for i,wd in enumerate(hook): w32(CAVE+i*4, wd)
+
+    # The immediate/raw-SJIS printer at 0x80048048 has a second, independent
+    # fixed-width advance.  Status-screen equipment names use this path, so
+    # hooking only the buffered compositor above leaves an eight-glyph (96px)
+    # effective limit and lets longer names write into the following rows.
+    raw_hook=[lbu('t6',0x10,'sp'),lbu('t7',0x11,'sp'),addiu('t9','t6',-0x81),sltiu('t8','t9',2)]
+    raw_ib=len(raw_hook); raw_hook.append(0)
+    raw_hook+=[sll('t9','t9',8),addu('t9','t9','t7'),lui('t8',hi(WTABLE)),addiu('t8','t8',lo(WTABLE)),
+               addu('t8','t8','t9'),lbu('v1',0,'t8'),jj(RAW_BACK),0]
+    raw_id=len(raw_hook); raw_hook+=[lhu('v1',0,'a0'),jj(RAW_BACK),0]
+    raw_hook[raw_ib]=beq('t8','zero',((RAW_CAVE+raw_id*4)-((RAW_CAVE+raw_ib*4)+4))>>2)
+    for i,wd in enumerate(raw_hook): w32(RAW_CAVE+i*4, wd)
     tbl=bytearray([12])*512
     def sidx(code):
         b1,b2=code>>8,code&0xff; row=(b1-0x81) if b1<0xa0 else (b1-0xc1); return (b2-0x40)+row*189
@@ -105,14 +118,13 @@ def build_exe(font_slpm, widths, slpm):
     tbl[0x40]=widths.get(0,4)
     for i in range(512): exe[foff(WTABLE)+i]=tbl[i]
     w32(0x80048b80, jj(CAVE))
+    w32(0x8004827c, jj(RAW_CAVE))
     BP.build_english_tree(exe, slpm)   # English C/D tree at 0x80117ec4 / 0x801187a4
     # NOTE: names are English, so the name decoder (0x80056e84 -> 0x80057fe4) uses the English
     # tree directly. No private Japanese-tree decoder is installed (that was for Japanese names).
-    # --- System-message half-width layer DISABLED (2026-07-10) ---
-    # The raw-SJIS system strings (memcard/config overlays) render glitchy under the ASCII-aware
-    # printer (pixel/VRAM composition issues we can't crack without live debugging). Shelved for
-    # now so system text reverts to original Japanese; dialogue/menus/names use a separate path
-    # and are unaffected. Re-enable these two + SS.apply_sys() in main() to resume the work.
+    # The abandoned one-byte ASCII layer remains disabled.  System messages now retain their
+    # reliable two-byte SJIS encoding and use the raw-printer VWF hook installed above; SS.apply_sys
+    # installs and repoints their natural English translations later in the build.
     # _install_sys_printer(exe, w32)   # ASCII-aware halfwidth printer for raw-SJIS system strings
     # _apply_lowercase_font(exe)       # add lowercase a-z to the 8x10 halfwidth font (0x800e8078)
     return exe
@@ -306,6 +318,11 @@ def make_patch(input_bin, exe, packa, slpm, packa0, cmdinit=None, cmdinit0=None,
         so=sec*2352; s=bytearray(bind[so:so+2352]); fix_mode2form1(s); bind[so:so+2352]=s
     os.makedirs("build", exist_ok=True)
     open(OUT_BIN,"wb").write(bytes(bind))
+    # pyxdelta refuses to replace an existing output file.  Builds are
+    # reproducible, so discard only the previous generated patch first.
+    out_xdelta = Path(OUT_XDELTA)
+    if out_xdelta.exists():
+        out_xdelta.unlink()
     ok=pyxdelta.run(str(input_bin), OUT_BIN, OUT_XDELTA)
     return ok, len(aff)
 
@@ -380,14 +397,14 @@ def main(argv=None):
     apply_name_tables(exe, slpm, PATHS)
     cmdinit = bytearray(cmdinit0)
     apply_cmdinit_names(cmdinit)             # REAL new-game party names (CMDINIT.BIN)
-    SS.apply_sys(exe)                        # memcard/save/load system strings (FULLWIDTH SJIS Latin,
-                                             # stock printer -- no hook; see sys_strings.py)
     MN.relocate_map_names(exe)               # field/location names (save list) -> English, relocated
                                              # to the rodata cave + both pointer tables repointed
     rdlogo = RD.patch_rdlogo(rdlogo0)        # boot disclaimer -> English (fullwidth, repointed)
     MT.rebuild_menu(exe, PATHS)
+    SS.apply_sys(exe)                        # boot-safe system strings, kept in their original slots
     print("[4/5] applying dialogue + menu banks...")
     packa = apply_banks(exe, packa0, slpm, PATHS)
+    STATUS.patch_status_texture(packa, exe)
     print("[5/5] patching bin + xdelta...")
     ok, sectors = make_patch(input_bin, exe, packa, slpm, packa0, cmdinit, cmdinit0, rdlogo, rdlogo0)
     print(f"DONE. {OUT_XDELTA} ok={ok}, {sectors} sectors, {os.path.getsize(OUT_XDELTA)} bytes")

@@ -20,7 +20,8 @@ fragment region and point the left slots (0,2,4) at them; point the right slots 
 at an empty string so they draw nothing. No code changes -> no risk of the garble the
 old ASCII-printer hook caused here.
 
-Render buffer is ~200px wide => ~16 fullwidth chars/line.
+The raw system printer now uses proportional advances for the fullwidth Latin glyphs,
+so the original three-row layout can carry a faithful, naturally spaced translation.
 """
 
 import struct
@@ -29,11 +30,17 @@ import build_en_tree as ET
 BASE = 0x801e40f8      # RDLOGO load address (fixed)
 PTR_TABLE = 0x684      # file offset of the 6-entry string pointer table
 
-# 3-line English disclaimer (each <=16 fullwidth chars to fit the ~200px buffer).
+# Direct translation of:
+# このゲームはフィクションであり
+# 登場する人物や団体は実在の個人および団体とは一切関係ありません
+#
+# The fragment region is only 0x6c bytes, so the second sentence is phrased compactly
+# while retaining the Japanese statement's actual meaning (no relation), rather than
+# changing it to the usual but looser "any resemblance is coincidental."
 LINES = [
-    "This is fiction.",   # row1 (y=4)
-    "Any resemblance",    # row2 (y=16)
-    "is coincidental.",   # row3 (y=28)
+    "A work of fiction.",  # row1 (y=4)
+    "No ties to real",     # row2 (y=16)
+    "people or groups.",   # row3 (y=28)
 ]
 
 
