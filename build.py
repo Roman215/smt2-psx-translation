@@ -61,7 +61,7 @@ def kern_font(slpm):
     for c in range(0x8260,0x827a): widths[sidx(c)] = kern(sidx(c))   # A-Z
     for c in range(0x8281,0x829b): widths[sidx(c)] = kern(sidx(c))   # a-z
     for c in range(0x824f,0x8259): widths[sidx(c)] = kern(sidx(c))   # 0-9
-    PUNCT = [0x8149,0x8148,0x8144,0x8143,0x8146,0x8147,0x8151,0x815e,0x8166,0x8165,0x8168,
+    PUNCT = [0x8149,0x8148,0x8144,0x8143,0x8146,0x8147,0x8151,0x815e,0x8184,0x8166,0x8165,0x8168,
              0x8167,0x815d,0x8169,0x816a,0x8163,0x8160,0x8192,0x817b,0x8195,0x8193]
     for c in PUNCT: widths[sidx(c)] = kern(sidx(c))
     widths[0] = 4  # space
@@ -122,11 +122,10 @@ def build_exe(font_slpm, widths, slpm):
     BP.build_english_tree(exe, slpm)   # English C/D tree at 0x80117ec4 / 0x801187a4
     # NOTE: names are English, so the name decoder (0x80056e84 -> 0x80057fe4) uses the English
     # tree directly. No private Japanese-tree decoder is installed (that was for Japanese names).
-    # The abandoned one-byte ASCII layer remains disabled.  System messages now retain their
-    # reliable two-byte SJIS encoding and use the raw-printer VWF hook installed above; SS.apply_sys
-    # installs and repoints their natural English translations later in the build.
-    # _install_sys_printer(exe, w32)   # ASCII-aware halfwidth printer for raw-SJIS system strings
-    # _apply_lowercase_font(exe)       # add lowercase a-z to the 8x10 halfwidth font (0x800e8078)
+    # Marker-prefixed system strings use one byte per English character.  The wrapper expands
+    # each byte to the corresponding existing fullwidth SJIS glyph before calling the stock blit,
+    # so they retain this same VWF/font while unmarked Japanese remains on the stock path.
+    _install_sys_printer(exe, w32)
     return exe
 
 def _apply_lowercase_font(exe):
@@ -160,51 +159,61 @@ def apply_cmdinit_names(cmdinit, names=None):
         for i in range(17):
             cmdinit[off + i] = data[i] if i < len(data) else 0
 
-# ---- ASCII-aware system-string printer -------------------------------------------------
-# The raw-SJIS system strings (memcard/save/config overlays) are drawn by string printer
-# 0x800482a4, which advances the string pointer by 2 bytes/char (fullwidth only) and draws
-# via blit 0x80048048. Everything (font, metrics, pen-advance) derives from *context (the
-# font descriptor). We replace the printer with a version that, per char, points the context
-# at a HALFWIDTH descriptor for ASCII bytes (<0x80) + advances the string by 1; fullwidth
-# SJIS bytes keep the original descriptor + advance 2 (so Japanese text is unaffected). Cave
-# lives in the rodata font-placeholder run (0x800d7500+, after the VWF hook+width table).
+# ---- Marker-based one-byte system-string printer ---------------------------------------
+# Strings beginning with 0x1f contain one-byte English.  Each byte is mapped back to its
+# fullwidth SJIS glyph in a temporary two-byte buffer and drawn by the original blitter.
+# Unmarked strings reproduce the two overwritten stock prologue instructions and jump back
+# to 0x800482ac, leaving every original Japanese caller byte-for-byte compatible.
 def _install_sys_printer(exe, w32):
-    # ASCII-aware printer (per-char): for each char, point *ctx at a halfwidth desc for ASCII
-    # bytes (else keep the caller's desc), draw, advance +1 (ascii) / +2 (fullwidth); restore
-    # the original desc at the end. This is the exact version confirmed to BOOT and render the
-    # memcard/config overlays in halfwidth. (KNOWN ISSUE: the RDLOGO boot disclaimer, which also
-    # uses this printer, renders garbled -- to be fixed by translating it to English later.)
-    PR, DESC, BLIT = 0x800d7500, 0x800d75c0, 0x80048048
-    # custom halfwidth descriptor: w8 h10, xsp0, font 0x800e8078 (8x10 w/ our lowercase), sel=1
-    struct.pack_into("<IIIII", exe, foff(DESC), 0x000a0008, 0, 0, 0x800e8078, 1)
-    ZERO,V0,T0,T1,A0,A1,S0,S1,S2,SP,RA = 0,2,8,9,4,5,16,17,18,29,31
+    PR, TABLE, BLIT, STOCK = 0x800d8300, 0x800d8400, 0x80048048, 0x800482ac
+    MARKER = 0x1f
+    ZERO,T0,T1,T2,T3,A0,A1,S0,S1,SP,RA = 0,8,9,10,11,4,5,16,17,29,31
     def RI(op,rs,rt,imm): return ((op&0x3f)<<26)|((rs&0x1f)<<21)|((rt&0x1f)<<16)|(imm&0xffff)
-    def SP_(rs,rt,rd,fn): return ((rs&0x1f)<<21)|((rt&0x1f)<<16)|((rd&0x1f)<<11)|(fn&0x3f)
+    def RR(rs,rt,rd,sa,fn): return ((rs&0x1f)<<21)|((rt&0x1f)<<16)|((rd&0x1f)<<11)|((sa&0x1f)<<6)|(fn&0x3f)
     ADDIU=lambda rt,rs,i:RI(0x09,rs,rt,i); LBU=lambda rt,o,rs:RI(0x24,rs,rt,o)
+    LHU=lambda rt,o,rs:RI(0x25,rs,rt,o);   SH=lambda rt,o,rs:RI(0x29,rs,rt,o)
     LW=lambda rt,o,rs:RI(0x23,rs,rt,o);    SW=lambda rt,o,rs:RI(0x2b,rs,rt,o)
-    SLTIU=lambda rt,rs,i:RI(0x0b,rs,rt,i); BEQ=lambda rs,rt,off:RI(0x04,rs,rt,off)
-    LUI=lambda rt,i:RI(0x0f,0,rt,i);       MOVE=lambda rd,rs:SP_(rs,0,rd,0x25)
-    JAL=lambda t:(0x03<<26)|((t>>2)&0x03ffffff); JR=lambda rs:SP_(rs,0,0,0x08)
+    BEQ=lambda rs,rt,off:RI(0x04,rs,rt,off); BNE=lambda rs,rt,off:RI(0x05,rs,rt,off)
+    LUI=lambda rt,i:RI(0x0f,0,rt,i);       MOVE=lambda rd,rs:RR(rs,0,rd,0,0x25)
+    SLL=lambda rd,rt,sa:RR(0,rt,rd,sa,0);  ADDU=lambda rd,rs,rt:RR(rs,rt,rd,0,0x21)
+    JAL=lambda t:(0x03<<26)|((t>>2)&0x03ffffff); JR=lambda rs:RR(rs,0,0,0,0x08)
     J=lambda t:(0x02<<26)|((t>>2)&0x03ffffff); NOP=0
-    dlo, dhi = DESC & 0xffff, (DESC>>16)+(1 if DESC & 0x8000 else 0)
+    tlo, thi = TABLE & 0xffff, (TABLE>>16)+(1 if TABLE & 0x8000 else 0)
     prog = [
-        ADDIU(SP,SP,-0x20), SW(RA,0x18,SP), SW(S0,0x10,SP), SW(S1,0x14,SP), SW(S2,0x1c,SP),
-        MOVE(S1,A0), MOVE(S0,A1), LW(S2,0,S1),          # s1=ctx s0=str s2=orig desc
-        # loop @8
-        LBU(V0,0,S0), BEQ(V0,ZERO,19), SLTIU(T1,V0,0x80),   # if 0 -> end@29 ; t1=ascii?
-        MOVE(T0,S2), BEQ(T1,ZERO,3), NOP,                   # t0=orig; if !ascii -> sf@16
-        LUI(T0,dhi), ADDIU(T0,T0,dlo),                      # t0=halfwidth desc
-        # sf @16
-        SW(T0,0,S1), MOVE(A0,S1), MOVE(A1,S0), JAL(BLIT), NOP,   # *ctx=font; draw glyph
-        LBU(V0,0,S0), SLTIU(T1,V0,0x80), ADDIU(S0,S0,2),        # advance str: +2, then
-        BEQ(T1,ZERO,-17), NOP, ADDIU(S0,S0,-1),                # if ascii -1 (net +1); loop@8
-        BEQ(ZERO,ZERO,-20), NOP,
-        # end @29
-        SW(S2,0,S1), LW(RA,0x18,SP), LW(S0,0x10,SP), LW(S1,0x14,SP), LW(S2,0x1c,SP),
-        JR(RA), ADDIU(SP,SP,0x20),
+        LBU(T0,0,A1), ADDIU(T1,ZERO,MARKER), 0, NOP,
+        ADDIU(SP,SP,-0x30), SW(RA,0x2c,SP), SW(S0,0x20,SP), SW(S1,0x24,SP),
+        MOVE(S1,A0), ADDIU(S0,A1,1),
+        # loop @10
+        # The PSX R3000 exposes load-delay slots: do not consume LBU/LHU results in
+        # the immediately following instruction.
+        LBU(T0,0,S0), NOP, 0, NOP,
+        SLL(T1,T0,1), LUI(T2,thi), ADDIU(T2,T2,tlo), ADDU(T2,T2,T1),
+        LHU(T3,0,T2), NOP, SH(T3,0x10,SP), MOVE(A0,S1), ADDIU(A1,SP,0x10), JAL(BLIT), NOP,
+        ADDIU(S0,S0,1), J(PR+10*4), NOP,
+        # end @28
+        LW(RA,0x2c,SP), LW(S0,0x20,SP), LW(S1,0x24,SP), JR(RA), ADDIU(SP,SP,0x30),
+        # stock fallback @33: reproduce 0x800482a4/a8, then continue at 0x800482ac
+        ADDIU(SP,SP,-0x20), SW(S0,0x10,SP), J(STOCK), NOP,
     ]
+    prog[2] = BNE(T0,T1,33-(2+1))
+    prog[12] = BEQ(T0,ZERO,28-(12+1))
     for i,wd in enumerate(prog): w32(PR+i*4, wd)
-    w32(0x800482a4, J(PR)); w32(0x800482a8, NOP)      # redirect printer entry to cave
+
+    # Raw-byte table: lhu/sh preserves the big-endian SJIS byte pair in memory.
+    # The game's glyph at SJIS 0x8192 is the Macca currency symbol (ћ), despite that
+    # code point conventionally decoding as a pound sign.
+    table = bytearray()
+    for value in range(128):
+        if value == 0x7f:
+            table += struct.pack(">H", 0x8192)
+            continue
+        char = chr(value) if 0x20 <= value <= 0x7e else "?"
+        try:
+            table += struct.pack(">H", ET.fullwidth(char))
+        except (KeyError, ValueError):
+            table += struct.pack(">H", ET.fullwidth("?"))
+    exe[foff(TABLE):foff(TABLE)+len(table)] = table
+    w32(0x800482a4, J(PR)); w32(0x800482a8, NOP)
 
 # ============================ 3. NAME TABLES ============================
 def apply_name_tables(exe, slpm, PATHS):

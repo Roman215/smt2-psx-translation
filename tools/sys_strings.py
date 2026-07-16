@@ -1,8 +1,8 @@
 """SMT2 raw-SJIS system strings (memcard/save/load, COMP menu, errors, menu help).
 
-These strings use the game's raw two-byte SJIS printer.  Its Latin glyphs now receive
-proportional advances from build.py's raw-printer VWF hook, so natural English fits the
-onscreen message areas even though the encoded characters remain two bytes each.
+English strings begin with marker 0x1f and store one ASCII byte per character.  The
+printer wrapper in build.py maps each byte back to the game's existing fullwidth SJIS
+glyph before drawing, preserving the established font and proportional advances.
 
 Every translation remains in its original executable slot.  This keeps the boot-time
 memory layout untouched; apply_sys validates every encoded string against the Japanese
@@ -24,6 +24,23 @@ def _fw(s):
     out = bytearray()
     for ch in s:
         out += struct.pack(">H", ET.fullwidth(ch))
+    return bytes(out)
+
+
+ASCII_MARKER = 0x1f
+
+
+def _ascii(s):
+    """Marker-prefixed one-byte English plus NUL; 0x7f represents Macca (ћ)."""
+    out = bytearray([ASCII_MARKER])
+    for ch in s:
+        if ch == "ћ":
+            out.append(0x7f)
+        elif 0x20 <= ord(ch) <= 0x7e:
+            out.append(ord(ch))
+        else:
+            raise SystemExit(f"unsupported one-byte system character: {ch!r} in {s!r}")
+    out.append(0)
     return bytes(out)
 
 
@@ -147,7 +164,7 @@ SYS = {
     # ===================== STAT / SHOP / CASINO =====================
     0x1d5c: (16, "Points"),               # 残りポイント (level-up points left)
     0x2308: (12, "Exit"),                 # 店を出る (leave shop)
-    0x1eec: (24, "Low on £!"),       # あら　£が　足りないわ (casino: not enough money)
+    0x1eec: (24, "Oh, you're short on ћ."),  # あら　ћが　足りないわ (not enough Macca)
     0x1f0c: (20, "Code:"),                # コードを入力せよ：
 
     # ===================== SYSTEM-MENU / CONFIG HELP LINES =====================
@@ -248,7 +265,7 @@ RETRANSLATED = {
     0x1e64: "Open the Config menu.",       # 設定メニューを起動します
     0x1e80: "Load save data.",             # セーブデータをロードします
     0x1e9c: "Create suspend data.",        # 中断セーブを行います
-    0x1eec: "Short on £!",                 # あら £が足りないわ
+    0x1eec: "Oh, you're short on ћ.",       # あら ћが足りないわ
     0x1f0c: "Enter:",                     # コードを入力せよ：
     0x201c: "Use on?",                    # 誰に使いますか？
     0x2308: "Leave",                      # 店を出る
@@ -289,120 +306,54 @@ for _off, _english in RETRANSLATED.items():
     _gap, _old_english = SYS[_off]
     SYS[_off] = (_gap, _english)
 
-# Boot-safe wording for strings whose natural long form exceeds the original
-# two-byte SJIS slot.  These are concise UI messages, not pointer relocations.
-IN_PLACE_ENGLISH = {
-    0x0bc0: "Suspend error",
-    0x0bdc: "Card damaged",
-    0x0bf8: "Format failed",
-    0x0c14: "Corrupt save data",
-    0x0c38: "or overwrite it.",
-    0x0c5c: "Swap cards",
-    0x0c78: "Need 2 free blocks",
-    0x0ca0: "Not enough space",
-    0x0cc8: "Load failed",
-    0x0ce0: "Save failed",
-    0x0cf8: "No suspend",
-    0x0d10: "No save data",
-    0x0d2c: "SMT II:",
-    0x0d44: "Insert in slot 1",
-    0x0d68: "No card inserted",
-    0x0d90: "Need room",
-    0x0da4: "Save needs 2 blocks",
-    0x0dcc: "blocks.",
-    0x0ddc: "Card free space",
-    0x0dfc: "No save/load",
-    0x0e18: "Card must be in",
-    0x0e54: "Card in slot1",
-    0x0e70: "No suspend save",
-    0x0e90: "Low on blocks",
-    0x0eac: "This save may use",
-    0x0ed0: "Continue?",
-    0x0f00: "Format to save",
-    0x0f28: "Not formatted",
-    0x0f44: "Slot 1 card",
-    0x0f60: "Resume wipes data",
-    0x0f84: "Load file?",
-    0x0f9c: "This overwrites",
-    0x0fbc: "Data exists",
-    0x0fd8: "Quick save?",
-    0x0ff0: "Proceed?",
-    0x1004: "be erased",
-    0x1018: "Old save will",
-    0x103c: "This file has a save",
-    0x1068: "Need 4 free blocks",
-    0x1094: "Save + suspend",
-    0x10b4: "need more room",
-    0x10d4: "One save may prevent",
-    0x1100: "Format...",
-    0x1114: "Loading",
-    0x1124: "Saving",
-    0x1134: "the card.",
-    0x1150: "Do not remove",
-    0x1170: "Checking card",
-    0x1190: "your body",
-    0x11a4: "Demons may take",
-    0x11c4: "Beware...",
-    0x11d8: "Turn off and rest.",
-    0x1200: "Save done.",
-    0x1218: "Select file to load",
-    0x1244: "Select file to save",
-    0x1878: "Can't summon",
-    0x1894: "Can't use magic",
-    0x18b4: "COMP unusable now",
-    0x18d8: "Cursed gear!",
-    0x18f4: "No magic",
-    0x191c: "Wrong alignment",
-    0x193c: "No items to reorder",
-    0x1974: "Locked in",
-    0x198c: "No COMP here",
-    0x19b0: "No magic",
-    0x19c8: "Not usable",
-    0x19e0: "No items",
-    0x19f8: "Nothing to scan",
-    0x1a18: "No items to drop",
-    0x1a3c: "No usable items",
-    0x1a5c: "No one free",
-    0x1a74: "No one back",
-    0x1a8c: "No summons",
-    0x1c60: "Cursed!",
-    0x1c78: "Inventory full",
-    0x1c98: "No equipment",
-    0x1e64: "Open Config",
-    0x1e80: "Load a save",
-    0x1e9c: "Quick save",
-    0x23dc: "Sorted!",
-    0x23f4: "Reorder",
-    0x2408: "View details",
-    0x2424: "Equip",
-    0x2438: "Use/sort/drop items",
-    0x2464: "Use magic",
-    0x2478: "Use COMP",
-    0x2944: "System menu",
-    0x2964: "Exit Config",
-    0x2980: "Stereo sound",
-    0x29a0: "Mono sound",
-    0x29c0: "Auto-heal: magic",
-    0x29e4: "Auto-heal: items",
-    0x2a08: "Travel faces up",
-    0x2a28: "North stays up",
-    0x2a48: "Guard if no MP/item",
-    0x2a70: "Attack if no MP/item",
-    0x2a9c: "Repeat action",
-    0x2ab8: "Sword/gun",
-    0x2ad0: "Battle effects off",
-    0x2af8: "Show effects",
-    0x2b14: "Faster battle messages",
-    0x2b4c: "Normal battle text",
-    0x2b78: "Show messages faster",
-    0x2ba4: "Normal msg speed",
-    0x2bc8: "Sort by align",
-    0x2be4: "Sort by level",
-    0x2c00: "Sort by name",
-    0x2c24: "Sort by race",
+# Shorten only the entries that still exceed their original slots after switching to
+# one byte per English character.
+ASCII_FIT_ENGLISH = {
+    0x0bdc: "Memory Card is damaged.",
+    0x0bf8: "Could not format card.",
+    0x0c5c: "with at least 2 blocks",
+    0x0cc8: "Could not load data.",
+    0x0ce0: "Could not save data.",
+    0x0cf8: "No suspend data found.",
+    0x0d10: "No save data was found.",
+    0x0d2c: "Shin Megami Tensei II",
+    0x0d44: "Insert Memory Card in slot 1.",
+    0x0d90: "Free space needed.",
+    0x0da4: "Saving needs at least 2 free blocks.",
+    0x0dcc: "is too low.",
+    0x0ddc: "Memory Card free space",
+    0x0e18: "Memory Card must be in slot 1",
+    0x0e70: "Suspend save will be disabled.",
+    0x0e90: "Not enough free blocks.",
+    0x0eac: "This save may prevent suspending.",
+    0x0f60: "Loading erases suspend data.",
+    0x0fbc: "Suspend data exists.",
+    0x1094: "For save and suspend data,",
+    0x10b4: "there are too few free blocks.",
+    0x1878: "Cannot summon this demon.",
+    0x1894: "Magic cannot be used now.",
+    0x18d8: "Curse prevents removal!",
+    0x18f4: "No usable magic available.",
+    0x191c: "Cannot summon this alignment.",
+    0x193c: "No items can be reordered.",
+    0x1974: "Demon cannot leave.",
+    0x19c8: "Cannot use that here.",
+    0x19f8: "No demons can be analyzed.",
+    0x1a18: "No items can be discarded.",
+    0x1a5c: "No demons can leave.",
+    0x1a74: "No demons can return.",
+    0x1a8c: "No demons can be summoned.",
+    0x1c60: "Cannot remove: cursed",
+    0x1c78: "Inventory full; cannot remove.",
+    0x1c98: "Nothing available to equip.",
+    0x23f4: "Change formation",
+    0x2a08: "Keep your heading at map top.",
+    0x2a28: "Keep north at map top.",
+    0x2a9c: "Repeat the last action.",
+    0x2ab8: "Swords/guns/basic only",
 }
 
-for _off, _english in IN_PLACE_ENGLISH.items():
+for _off, _english in ASCII_FIT_ENGLISH.items():
     _gap, _old_english = SYS[_off]
     SYS[_off] = (_gap, _english)
 
@@ -414,12 +365,12 @@ _JP_TITLE = bytes.fromhex("905e81458f97905f935d90b68251")  # 真・女神転生�
 TITLE_FMT_OFFS = (0x1388, 0x13cc, 0x1410, 0x1454)
 
 def apply_sys(exe):
-    """Write the retranslated system strings into their original fixed slots."""
+    """Write marker-prefixed one-byte English into the original fixed slots."""
     for off, (gap, en) in SYS.items():
-        data = _fw(en)
-        if len(data) >= gap:
+        data = _ascii(en)
+        if len(data) > gap:
             raise SystemExit(
-                f"sys 0x{off:x} OVERFLOW {len(data)}>={gap} bytes: {en!r}")
+                f"sys 0x{off:x} OVERFLOW {len(data)}>{gap} bytes: {en!r}")
         exe[off:off + gap] = data + bytes(gap - len(data))
     # save-file list title: replace 真・女神転生２ -> ＳＭＴ　ＩＩ, keep the format tail intact
     new_title = _fw("SMT II")

@@ -12,8 +12,8 @@ renders on two lines).
 English names run longer than the katakana, so we RELOCATE the translated strings into
 the free rodata font-placeholder cave and REPOINT both tables. No code changes.
 
-Cave: 0x800d7500 .. 0x800d9144 (7236 bytes) -- the tofu-placeholder run after the VWF
-hook (0x800d7254) + width table (0x800d7300, 512B). Never rendered, never written = safe.
+Cave: 0x800d7500 .. 0x800d8300.  The following 0x800d8300 .. 0x800d8500 range is
+reserved for the marker-based one-byte system-string printer and its ASCII/SJIS table.
 
 Translation notes: dropped the redundant "旧" (former) prefix (all of Tokyo is ruined),
 '@' = line break so long names split Name/Floor for the ~2-line display, Kabbalah Sefirot
@@ -29,7 +29,7 @@ AREA_COUNT = 17
 MAP_TABLE = 0x8011a084
 MAP_COUNT = 512
 STR_LO, STR_HI = 0x80016000, 0x80017000     # original string block bounds
-CAVE_LO, CAVE_HI = 0x800d7500, 0x800d9144    # relocation cave (rodata font placeholders)
+CAVE_LO, CAVE_HI = 0x800d7500, 0x800d8300    # 0x800d8300+ reserved by build.py
 BR = 0x8197                                   # line-break control char
 
 # English for each unique string, in ASCENDING-ADDRESS order (must be exactly 144 long).

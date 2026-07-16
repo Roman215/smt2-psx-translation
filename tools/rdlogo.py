@@ -13,19 +13,12 @@ state (sstate8):
 - file 0x684-0x69b: the 6-entry absolute pointer table (base+offset).
 - file 0x69c+: function-pointer table (state machine) -- DO NOT TOUCH.
 
-Strategy (same reliability principle as sys_strings): rewrite the fragments as FULLWIDTH
-SJIS Latin so the STOCK printer draws them (the 12x12 font 0x800d4188 has Latin glyphs).
-We REPOINT to a clean single-column 3-line layout: put 3 English lines in the (now free)
-fragment region and point the left slots (0,2,4) at them; point the right slots (1,3,5)
-at an empty string so they draw nothing. No code changes -> no risk of the garble the
-old ASCII-printer hook caused here.
-
-The raw system printer now uses proportional advances for the fullwidth Latin glyphs,
-so the original three-row layout can carry a faithful, naturally spaced translation.
+The three English lines use the same marker-prefixed one-byte format as sys_strings.py.
+The main executable's system-printer wrapper expands those bytes to the existing SJIS
+glyphs, so the overlay gains storage capacity without changing its code or pointers.
 """
 
 import struct
-import build_en_tree as ET
 
 BASE = 0x801e40f8      # RDLOGO load address (fixed)
 PTR_TABLE = 0x684      # file offset of the 6-entry string pointer table
@@ -34,41 +27,33 @@ PTR_TABLE = 0x684      # file offset of the 6-entry string pointer table
 # このゲームはフィクションであり
 # 登場する人物や団体は実在の個人および団体とは一切関係ありません
 #
-# The fragment region is only 0x6c bytes, so the second sentence is phrased compactly
-# while retaining the Japanese statement's actual meaning (no relation), rather than
-# changing it to the usual but looser "any resemblance is coincidental."
 LINES = [
-    "A work of fiction.",  # row1 (y=4)
-    "No ties to real",     # row2 (y=16)
-    "people or groups.",   # row3 (y=28)
+    "This game is a work of fiction.",
+    "Any relation to real people or groups",
+    "is purely coincidental.",
 ]
 
 
-def _fw(s):
-    out = bytearray()
-    for ch in s:
-        out += struct.pack(">H", ET.fullwidth(ch))
-    return bytes(out)
+def _ascii(s):
+    return bytes([0x1f]) + s.encode("ascii") + b"\0"
 
 
 def patch_rdlogo(rd):
     """rd: bytearray of RDLOGO.BIN. Rewrites fragments (file 0x00-0x63) as English and
     repoints the pointer table (file 0x684) to a single-column 3-line layout."""
     rd = bytearray(rd)
-    # Lay the 3 lines + one empty string into the fragment region starting at file 0x00.
-    # Each entry: fullwidth bytes + NUL, 2-byte aligned. Region must end before code @0x6c.
+    # Lay the three marker-prefixed lines plus one empty string into file 0x00-0x6b.
+    rd[0:0x6c] = bytes(0x6c)
     offs = []
     pos = 0x00
     for s in LINES:
-        data = _fw(s)
+        data = _ascii(s)
         offs.append(pos)
         rd[pos:pos + len(data)] = data
         pos += len(data)
-        rd[pos] = 0; rd[pos + 1] = 0   # NUL (2 bytes, keep even alignment)
-        pos += 2
     empty_off = pos
-    rd[pos] = 0; rd[pos + 1] = 0
-    pos += 2
+    rd[pos] = 0
+    pos += 1
     if pos > 0x6c:
         raise SystemExit(f"RDLOGO strings overflow into code: end 0x{pos:x} > 0x6c")
     # Repoint: left column (slots 0,2,4) -> lines; right column (1,3,5) -> empty.
