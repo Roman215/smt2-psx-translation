@@ -270,20 +270,20 @@ CD_BANKS = None
 def apply_banks(exe, packa, slpm, PATHS):
     """Rebuild C/D dialogue banks with TR.TRANS (translated) + placeholders.
 
-    Natural English makes Banks 2 and 3 larger than their original entries.  PACKA
-    is the final ISO file and is followed by blank data sectors, so extend it seven
-    sectors, shift every entry after Bank 3 by the same amount, and keep the archive
-    table and ISO directory in sync.  The BIN's overall sector count is unchanged.
+    Bank 2 is kept within its original 16-sector entry.  Bank 3 needs three sectors
+    beyond its original allocation; PACKA is the final ISO file and is followed by
+    blank data sectors, so extend it by those three sectors and shift every later
+    archive entry by the same amount.  The BIN's overall sector count is unchanged.
     """
     ED=(0x4544,True)
     def U16(a): return struct.unpack_from("<H", exe, foff(a))[0]
     alloc6=0x80116f2c-0x80115bd8; alloc7=0x80117cc8-0x80116f2c
-    # Bank 3 ends seven sectors beyond the original following-entry boundary.
+    # Bank 3 ends three sectors beyond the original following-entry boundary.
     # Preserve an immutable source image for decoding, then make room by shifting
     # the entire PACKA tail from sector 0x6624 onward.
     source_packa=bytes(packa)
     tail_sector=0x6624
-    tail_shift_sectors=7
+    tail_shift_sectors=3
     tail_fo=tail_sector*2048
     tail_shift=tail_shift_sectors*2048
     packa=bytearray(len(source_packa)+tail_shift)
@@ -295,21 +295,36 @@ def apply_banks(exe, packa, slpm, PATHS):
     banks={
         0:("packa",0x32fb000,15*2048,0x32fb000,15*2048),
         1:("packa",0x3302800, 2*2048,0x3302800, 2*2048),
-        2:("packa",0x3303800,16*2048,0x3303800,20*2048),
-        3:("packa",0x330b800,13*2048,0x330d800,16*2048),
+        2:("packa",0x3303800,16*2048,0x3303800,16*2048),
+        3:("packa",0x330b800,13*2048,0x330b800,16*2048),
         6:("exe",0x80115bd8,alloc6,0x80115bd8,alloc6),
         7:("exe",0x80116f2c,alloc7,0x80116f2c,alloc7),
     }
     def build_block(msgs,N):
-        offs=[]; data=bytearray()
+        # Offset entries may safely share an identical self-terminating stream.
+        # Interning exact duplicates is lossless and leaves extra headroom in the
+        # fixed-size dialogue allocations.
+        offs=[]; data=bytearray(); interned={}; previous_terminated=True
         for m in msgs:
             cur=[]
             for t in m: cur+=PATHS[t]
-            offs.append(len(data)); b=0; hi=True
+            encoded=bytearray(); b=0; hi=True
             for n in cur:
                 if hi: b=(n&0xf)<<4; hi=False
-                else: data.append(b|(n&0xf)); hi=True
-            if not hi: data.append(b)
+                else: encoded.append(b|(n&0xf)); hi=True
+            if not hi: encoded.append(b)
+            encoded=bytes(encoded)
+            terminated=ED in m
+            # An unterminated stream deliberately continues into the next
+            # message (Bank 3 has one such split entry), so its successor must
+            # remain physically adjacent even when that successor is a duplicate.
+            if previous_terminated and terminated and encoded in interned:
+                offs.append(interned[encoded])
+            else:
+                offs.append(len(data))
+                if terminated: interned.setdefault(encoded,len(data))
+                data+=encoded
+            previous_terminated=terminated
         do=2+2*N; out=bytearray(struct.pack("<H",do)); out+=struct.pack("<%dH"%N,*offs); out+=data
         return bytes(out)
     for bank,(buf,src_base,src_alloc,dst_base,dst_alloc) in banks.items():
@@ -331,11 +346,10 @@ def apply_banks(exe, packa, slpm, PATHS):
         else:
             exe[dst_fo:dst_fo+len(blk)]=blk
 
-    # PACKA's entry-start table: Bank 3 moves from 0x6617 to 0x661B, and
-    # every following start (including the final 0x66E6 end marker) moves +7.
+    # Bank 3 retains its original 0x6617 start. Every following PACKA start
+    # (including the final 0x66E6 end marker) moves forward three sectors.
     if struct.unpack_from("<H",slpm,0xda190)[0] != 0x6617:
         raise SystemExit("unexpected PACKA Bank 3 sector-table entry")
-    struct.pack_into("<H",exe,0xda190,0x661b)
     for off in range(0xda192,0xda1e0,2):
         old=struct.unpack_from("<H",slpm,off)[0]
         if not 0x6624 <= old <= 0x66e6:
