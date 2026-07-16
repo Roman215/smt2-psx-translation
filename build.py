@@ -268,12 +268,25 @@ def _decode_traits(slpm):
 # ============================ 4. DIALOGUE + MENU (banks) ============================
 CD_BANKS = None
 def apply_banks(exe, packa, slpm, PATHS):
-    """Rebuild C/D dialogue banks with TR.TRANS (translated) + placeholders. Returns modified packa."""
+    """Rebuild C/D dialogue banks with TR.TRANS (translated) + placeholders.
+
+    Bank 2's natural English script is larger than its original 16-sector file.
+    Bank 3 currently needs only three sectors, so move its PACKA boundary four
+    sectors later.  Both rebuilt files still remain inside their original combined
+    0x3303800..0x3312000 region; no following PACKA resource is displaced.
+    """
     ED=(0x4544,True)
     def U16(a): return struct.unpack_from("<H", exe, foff(a))[0]
     alloc6=0x80116f2c-0x80115bd8; alloc7=0x80117cc8-0x80116f2c
-    banks={0:("packa",0x32fb000,15*2048),1:("packa",0x3302800,2*2048),2:("packa",0x3303800,16*2048),
-           3:("packa",0x330b800,13*2048),6:("exe",0x80115bd8,alloc6),7:("exe",0x80116f2c,alloc7)}
+    # bank: (buffer, source base, source allocation, destination base, destination allocation)
+    banks={
+        0:("packa",0x32fb000,15*2048,0x32fb000,15*2048),
+        1:("packa",0x3302800, 2*2048,0x3302800, 2*2048),
+        2:("packa",0x3303800,16*2048,0x3303800,20*2048),
+        3:("packa",0x330b800,13*2048,0x330d800, 9*2048),
+        6:("exe",0x80115bd8,alloc6,0x80115bd8,alloc6),
+        7:("exe",0x80116f2c,alloc7,0x80116f2c,alloc7),
+    }
     def build_block(msgs,N):
         offs=[]; data=bytearray()
         for m in msgs:
@@ -286,11 +299,13 @@ def apply_banks(exe, packa, slpm, PATHS):
             if not hi: data.append(b)
         do=2+2*N; out=bytearray(struct.pack("<H",do)); out+=struct.pack("<%dH"%N,*offs); out+=data
         return bytes(out)
+    source_packa=bytes(packa)
     packa=bytearray(packa)
-    for bank,(buf,base,alloc) in banks.items():
-        fo=base if buf=="packa" else foff(base)
-        src=packa if buf=="packa" else slpm
-        msgs,N=BR.decode_all(src[fo:fo+alloc],0x80117ec4,0x801187a4,slpm)
+    for bank,(buf,src_base,src_alloc,dst_base,dst_alloc) in banks.items():
+        src_fo=src_base if buf=="packa" else foff(src_base)
+        dst_fo=dst_base if buf=="packa" else foff(dst_base)
+        src=source_packa if buf=="packa" else slpm
+        msgs,N=BR.decode_all(src[src_fo:src_fo+src_alloc],0x80117ec4,0x801187a4,slpm)
         out=[]
         for i in range(N):
             mid=(bank<<12)|i
@@ -298,9 +313,18 @@ def apply_banks(exe, packa, slpm, PATHS):
             else:
                 ph=TP.placeholder(msgs[i]); ph=ph+[ED] if (not ph or ph[-1]!=ED) else ph; out.append(ph)
         blk=build_block(out,N)
-        if len(blk)>alloc: raise SystemExit(f"bank{bank} OVERFLOW {len(blk)}>{alloc}")
-        if buf=="packa": packa[base:base+len(blk)]=blk
-        else: exe[foff(base):foff(base)+len(blk)]=blk
+        if len(blk)>dst_alloc: raise SystemExit(f"bank{bank} OVERFLOW {len(blk)}>{dst_alloc}")
+        if buf=="packa":
+            packa[dst_fo:dst_fo+dst_alloc]=b"\xCC"*dst_alloc
+            packa[dst_fo:dst_fo+len(blk)]=blk
+        else:
+            exe[dst_fo:dst_fo+len(blk)]=blk
+
+    # PACKA's entry-start table: Bank 3 moves from sector 0x6617 to 0x661B.
+    # The next entry remains at 0x6624, leaving Bank 3 nine sectors.
+    if struct.unpack_from("<H",slpm,0xda190)[0] != 0x6617:
+        raise SystemExit("unexpected PACKA Bank 3 sector-table entry")
+    struct.pack_into("<H",exe,0xda190,0x661b)
     return packa
 
 # ============================ 5. PATCH + XDELTA ============================
