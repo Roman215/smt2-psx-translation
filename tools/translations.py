@@ -6,6 +6,7 @@
 # spelling to that glyph so older, not-yet-retranslated banks remain compatible.
 
 TRANS = {
+    0x0000: ["What will you do?", 'ED'],
  # ---- Bank 0: opening Valhalla / Okamoto Gym arc (retranslated from Japanese) ----
  0x1c6:["Voice: ...If anyone is...", 'CR', "...receiving this transmission...", 'CR',
         "...this is...", 'WT','ED'],
