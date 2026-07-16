@@ -1,0 +1,12 @@
+*.bin
+*.xdelta
+*.state*
+*.sstate*
+*.str
+*.exe
+Extracted/
+*.cue
+*.pyc
+__pycache__/
+build/
+SMT2_full_script.txt
