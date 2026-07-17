@@ -1,11 +1,37 @@
 """Production exe: kerned font + VWF advance hook + English-only C/D Huffman tree
-(chars + control codes with correct dispatch indices). No dictionary/MTE.
+(chars + control codes with correct dispatch indices, optionally + MTE dictionary).
 A/B tree (banks 4,5) left untouched so Japanese negotiation still decodes.
-Writes exe_prod.bin. Reusable: import build_prod() ."""
+
+MTE (mte=True): each en_dictionary entry is a control-flagged leaf (struct=0xC000|6,
+sym=0x8540+i). The engine's control dispatch jals jump-table slot 6, whose 16-byte
+stub (a lone default handler in the stock exe, unreferenced by any tree we install)
+jals our handler, which looks up the expansion string and tail-jumps the stock
+string-append routine 0x80058244 (the Fe/name-insert path), returning through the
+stub to the stock epilogue."""
 import struct, json
 import build_en_tree as ET
+import en_dictionary as D
 
 STRUCT=0x80117ec4; SYM=0x801187a4; STCAP=SYM-STRUCT
+
+# ---- MTE runtime layout -----------------------------------------------------------
+# Lives in the tail of the rodata font-placeholder cave, AFTER bank 7's relocated
+# block (build.py caps bank 7 at MTE_BASE when building with --mte). The freed JP
+# map-name block at 0x80016124 was considered and rejected: it contains live
+# sub-structures (a pointer table at 0x8001628c and 18 code reads of 0x800162c8).
+DICT_WEIGHT_MULT = 1.5                 # dict-vs-char Huffman weight balance
+NAME_CORPUS_WEIGHT = 8                 # extra weight for name/menu-table chars (char-only consumers)
+MTE_BASE  = 0x800d8880                 # bank 7's allocation ends here in MTE builds
+MTE_H     = MTE_BASE                   # handler code (9 instructions, padded to 0x40)
+DICT_PTRS = MTE_BASE + 0x40            # expansion-string pointer table
+CAVE_END  = 0x800d9144
+JT        = 0x800132b4                 # 205-entry control dispatch jump table
+STUBS     = 0x80058358                 # 16-byte dispatch stubs (slot i = STUBS+i*0x10)
+APPEND    = 0x80058244                 # stock append: a0 = null-terminated SJIS
+EPILOGUE  = 0x80059044                 # stock dispatch epilogue
+DECODED_SYM = 0x801d15de               # decoder's just-decoded symbol global
+STOCK6    = 0x80059ce4                 # stock slot-6 handler = event-script choice-menu op
+
 def _foff(a): return (a-0x80010000)+0x800
 
 def control_index_map(slpm):
@@ -22,15 +48,63 @@ def control_index_map(slpm):
     dfs(0,0)
     return cidx
 
-def build_english_tree(exe, slpm):
-    """Lay out an English-only C/D tree (chars + controls) into exe (bytearray)."""
+def _corpus_freqs(cidx):
+    """Huffman weights measured from the real content this tree encodes (MTE mode).
+
+    Chars and dict tokens are counted by tokenizing every authored translation;
+    the name/menu tables (char-only consumers with tight per-table byte budgets)
+    contribute their chars at NAME_CORPUS_WEIGHT so capitals and other name-heavy
+    chars keep short codes. ET.build_freqs supplies a small floor so the full
+    char repertoire always has a leaf.
+    """
+    from collections import Counter
+    import translations as TR, translate_pipeline as TP
+    import name_tables as NT, menu_table as MT
+    chars=Counter(); dicts=Counter(); ctrls=Counter()
+    for author in TR.TRANS.values():
+        for part in author:
+            if isinstance(part,tuple): ctrls[part[0]]+=1          # raw token
+            elif part in TP.CTRL_NAME: ctrls[TP.CTRL_NAME[part][0]]+=1
+            else:
+                for sym,is_ctl in TP.text_tokens(part):
+                    (dicts if is_ctl else chars)[sym]+=1
+    K=NAME_CORPUS_WEIGHT
+    name_texts=list(NT.DEMONS)+list(NT.RACES)+list(NT.NPCS)+list(NT.LOCATIONS) \
+        +list(NT.DRINKS)+list(NT.SPELLS)+list(NT.ITEMS) \
+        +list(NT.TRAITS_MAP.values())+[s for s in MT.MENU.values() if s]
+    for s in name_texts:
+        if not s: continue
+        for ch in s:
+            try: chars[ET.fullwidth(ch)]+=K
+            except KeyError: pass
+    freqs={}
+    base=ET.build_freqs(150000)
+    total=sum(chars.values()) or 1
+    for k,v in base.items():
+        if isinstance(k,int):
+            freqs[k]=0.5+v*total/150000.0*0.02        # repertoire floor
+    for sym,n in chars.items(): freqs[sym]=freqs.get(sym,0.5)+n
+    for code in cidx:                                  # controls: ('C',code)
+        freqs[('C',code)]=ET.CONTROLS.get(code,1)+ctrls.get(code,0)
+    dcode=D.code_map()
+    for s,_w in D.all_entries():                       # dict: ('D',code)
+        freqs[('D',dcode[s])]=max(dicts.get(dcode[s],0)*DICT_WEIGHT_MULT,0.1)
+    return freqs
+
+def build_english_tree(exe, slpm, mte=False):
+    """Lay out an English-only C/D tree (chars + controls [+ MTE dict]) into exe."""
     import heapq
     from collections import deque
     def w16(a,v): struct.pack_into("<H",exe,_foff(a),v)
     cidx=control_index_map(slpm)
-    freqs=ET.build_freqs(150000)                      # char symbols (int keys)
-    for code,idx in cidx.items():                     # controls: ('C',code)
-        freqs[('C',code)]=ET.CONTROLS.get(code,1)
+    if mte:
+        if D.DICT_JT_INDEX in cidx.values():
+            raise SystemExit(f"jump-table index {D.DICT_JT_INDEX} is not free after all")
+        freqs=_corpus_freqs(cidx)
+    else:
+        freqs=ET.build_freqs(150000)                  # char symbols (int keys)
+        for code,idx in cidx.items():                 # controls: ('C',code)
+            freqs[('C',code)]=ET.CONTROLS.get(code,1)
     # d-ary huffman
     items=list(freqs.items()); L=len(items); pad=(-(L-1))%15
     heap=[]; tree={}; nid=0
@@ -58,8 +132,10 @@ def build_english_tree(exe, slpm):
             if tree[c][0]=='node': q.append(c)
     assert nxt<=STCAP, f"tree overflow {nxt}>{STCAP}"
     def entry(sym):
-        if isinstance(sym,tuple):  # control
-            return (0xC000|cidx[sym[1]], sym[1])
+        if isinstance(sym,tuple):
+            if sym[0]=='C':  # control
+                return (0xC000|cidx[sym[1]], sym[1])
+            return (0xC000|D.DICT_JT_INDEX, sym[1])  # ('D', dict code)
         return (0x8000, sym)
     for i,base in off.items():
         for nib in range(16):
@@ -71,4 +147,70 @@ def build_english_tree(exe, slpm):
                 else: st,sy=off[c],0
             else: st,sy=0x7fff,0
             w16(STRUCT+ea,st); w16(SYM+ea,sy)
+    if mte:
+        _install_mte_runtime(exe)
     return codes, cidx
+
+def _install_mte_runtime(exe):
+    """Write the dict handler, pointer table, expansion strings, and stub 6."""
+    def w32(a,v): struct.pack_into("<I",exe,_foff(a),v)
+    entries=D.all_entries()
+    # Expansion strings (fullwidth SJIS, single-0 terminated) + pointer table.
+    strs_base=DICT_PTRS+4*len(entries)
+    ptrs=[]; blob=bytearray()
+    for s,_w in entries:
+        ptrs.append(strs_base+len(blob))
+        for ch in s: blob+=ET.fullwidth(ch).to_bytes(2,"big")
+        blob.append(0)
+    end=strs_base+len(blob)
+    if end>CAVE_END:
+        raise SystemExit(f"MTE strings overflow cave: {end:#x} > {CAVE_END:#x}")
+    for i,p in enumerate(ptrs): w32(DICT_PTRS+i*4,p)
+    exe[_foff(strs_base):_foff(strs_base)+len(blob)]=blob
+    # Handler.  CRITICAL: jump-table slot 6 is NOT free at runtime -- it is the
+    # event-script CHOICE-MENU op.  The interpreter's synthetic dispatcher
+    # (0x80057634: lbu from the script cursor *0x801d15e0 -> sh 0x801d15dc ->
+    # jal 0x800582f0) feeds raw script bytes into the same jump table, and the
+    # first YES/NO choice dispatches index 6 with 0x801d15de still holding the
+    # ED symbol (proven live: choice save state has 15dc=6, 15de=0x4544).  So
+    # the handler must range-check the symbol: dict codes take the append path,
+    # anything else falls through to the stock slot-6 handler unchanged.
+    #   a0 = DICT_PTRS[decoded_sym - 0x8540]; tail-jump the stock append.
+    # ori fills the R3000 lhu load-delay slot before v1 is consumed, and
+    # subtracting DICT_CODE_BASE first keeps every immediate in range.
+    ZERO,V0,V1,A0,T0,T1,T2=0,2,3,4,8,9,10
+    RI=lambda op,rs,rt,imm:((op&0x3f)<<26)|((rs&0x1f)<<21)|((rt&0x1f)<<16)|(imm&0xffff)
+    LUI=lambda rt,i:RI(0x0f,0,rt,i); LHU=lambda rt,o,rs:RI(0x25,rs,rt,o)
+    LW=lambda rt,o,rs:RI(0x23,rs,rt,o); ADDIU=lambda rt,rs,i:RI(0x09,rs,rt,i)
+    ORI=lambda rt,rs,i:RI(0x0d,rs,rt,i); SLTIU=lambda rt,rs,i:RI(0x0b,rs,rt,i)
+    BEQ=lambda rs,rt,off:RI(0x04,rs,rt,off)
+    SLL=lambda rd,rt,sa:((rt&0x1f)<<16)|((rd&0x1f)<<11)|((sa&0x1f)<<6)
+    ADDU=lambda rd,rs,rt:((rs&0x1f)<<21)|((rt&0x1f)<<16)|((rd&0x1f)<<11)|0x21
+    SUBU=lambda rd,rs,rt:((rs&0x1f)<<21)|((rt&0x1f)<<16)|((rd&0x1f)<<11)|0x23
+    J=lambda t:(0x02<<26)|((t>>2)&0x03ffffff); JAL=lambda t:(0x03<<26)|((t>>2)&0x03ffffff)
+    NOP=0
+    lo=lambda x:x&0xffff; hi=lambda x:((x>>16)+(1 if x&0x8000 else 0))&0xffff
+    L_STOCK=13                       # index of the fallthrough branch target
+    handler=[
+        LUI(V0,(DECODED_SYM>>16)&0xffff),
+        LHU(V1,DECODED_SYM&0xffff,V0),           # v1 = decoded symbol
+        ORI(T0,ZERO,D.DICT_CODE_BASE),           # load-delay filler
+        SUBU(T1,V1,T0),                          # t1 = sym - 0x8540
+        SLTIU(T2,T1,len(entries)),               # dict code?
+        BEQ(T2,ZERO,L_STOCK-6),                  # no -> stock choice-menu op
+        SLL(V1,T1,2),                            # (delay slot)
+        LUI(V0,hi(DICT_PTRS)),
+        ADDIU(V0,V0,lo(DICT_PTRS)),
+        ADDU(V0,V0,V1),
+        LW(A0,0,V0),
+        J(APPEND),
+        NOP,
+        J(STOCK6),                               # L_STOCK: ra still = stub+8
+        NOP,
+    ]
+    assert MTE_H+len(handler)*4<=DICT_PTRS
+    for i,wd in enumerate(handler): w32(MTE_H+i*4,wd)
+    # Repurpose the (tree-unreferenced) dispatch stub 6.
+    stub=STUBS+D.DICT_JT_INDEX*0x10
+    w32(stub+0,JAL(MTE_H)); w32(stub+4,NOP); w32(stub+8,J(EPILOGUE)); w32(stub+12,NOP)
+    w32(JT+D.DICT_JT_INDEX*4,stub)   # already points here in the stock exe; keep explicit

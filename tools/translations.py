@@ -253,7 +253,10 @@ TRANS = {
     0x00da:["Return whenever you have need.",'ED'],
     0x00db:["Anything else to buy?",'ED'],
     0x00dc:["Anything else to sell?",'ED'],
-    0x00dd:["Items filled with Chaos power.",'WT'],
+    # Original 0x0dd has no [ED]: it flows into 0x0de's stream. Flow-through
+    # only survives the rebuild when the stream's nibble count happens to be
+    # even, so author it self-contained instead (0x0de still works alone).
+    0x00dd:["Items filled with Chaos power.",'WT',"What will you buy?",'ED'],
     0x00de:["What will you buy?",'ED'],
     0x00df:["You have nothing I can buy.",'WT','ED'],
     0x00e0:["What will you sell?",'ED'],
@@ -2808,7 +2811,16 @@ TRANS = {
       "Your power exceeded my hopes.",'CR',"Have your memories returned?",'WT','PG',
       "I will reveal your past, but",'CR',"first I need your help.",'WT',
       "The woman who sought you is held",'CR',"at the Factory as a deserter.",'WT','PG',
-      "Please, ",'SY',". Rescue her, then",'CR',"I will tell you everything...",'WT'],
+      "Please, ",'SY',". Rescue her, then",'CR',"I will tell you everything...",'WT',
+      # The original 0x3077 stream has no [ED]: it flows straight into 0x3078's
+      # stream (shared tail; 0x3078 is also shown alone on revisits). The rebuilt
+      # block can't guarantee that nibble-parity flow-through (an odd-length
+      # stream gets a garbage pad nibble), so the tail is duplicated here to
+      # keep the full scene self-contained.
+      'PG',"You can only reach her by passing",'CR',"through the underground.",'WT',
+      "Ask the man on the westernmost road",'CR',"along the passage from Valhalla",'CR',
+      "to the Center. He will know the way.",'WT',
+      "Please. You are my only hope.",'WT','ED'],
     0x3078:['PG',"You can only reach her by passing",'CR',"through the underground.",'WT',
       "Ask the man on the westernmost road",'CR',"along the passage from Valhalla",'CR',
       "to the Center. He will know the way.",'WT',
