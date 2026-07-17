@@ -15,17 +15,16 @@ import build_en_tree as ET, block_rebuild as BR, build_prod_exe as BP
 CTRL_NAME={n:(struct.unpack(">H",n.encode("ascii"))[0],True) for n in
   "CR WT PG ED SY SN Fe TI IT FI FO NI AG SU MN KO OT ZK ZO MG MH PP AL SE TW".split()}
 
-# MTE dict matching (OFF by default; build.py --mte enables it). Case-sensitive
-# greedy longest-match: buckets are per first char, longest first, so the first
-# startswith hit is the longest match. Only dialogue text goes through
-# text_tokens -- the name/menu tables build their char tokens directly.
+# Dictionary matching configured by build.py after mining the current corpus.
+# Matching is case-sensitive and greedy-longest: buckets are per first char,
+# longest first. Only dialogue goes through text_tokens; name/menu tables build
+# their character tokens directly.
 _DCODE={}
 _DBYFIRST={}
 
-def enable_mte():
-    import en_dictionary as D
+def configure_dictionary(entries, code_base):
     _DCODE.clear(); _DBYFIRST.clear()
-    _DCODE.update(D.code_map())
+    _DCODE.update({s:code_base+i for i,(s,_weight) in enumerate(entries)})
     for s in sorted(_DCODE, key=len, reverse=True):
         _DBYFIRST.setdefault(s[0], []).append(s)
 
