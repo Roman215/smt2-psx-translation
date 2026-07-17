@@ -93,7 +93,7 @@ def kern_font(slpm):
     return bytes(exe), widths
 
 # ============================ 2. BUILD EXE ============================
-def build_exe(font_slpm, widths, slpm):
+def build_exe(font_slpm, widths, slpm, mte=False):
     """VWF advance hooks + width table + English-only C/D tree. Returns exe bytearray."""
     exe = bytearray(font_slpm)
     def w32(a, v): struct.pack_into("<I", exe, foff(a), v)
@@ -144,7 +144,7 @@ def build_exe(font_slpm, widths, slpm):
     for i in range(512): exe[foff(WTABLE)+i]=tbl[i]
     w32(0x80048b80, jj(CAVE))
     w32(0x8004827c, jj(RAW_CAVE))
-    BP.build_english_tree(exe, slpm)   # English C/D tree at 0x80117ec4 / 0x801187a4
+    BP.build_english_tree(exe, slpm, mte=mte)   # English C/D tree at 0x80117ec4 / 0x801187a4
     # NOTE: names are English, so the name decoder (0x80056e84 -> 0x80057fe4) uses the English
     # tree directly. No private Japanese-tree decoder is installed (that was for Japanese names).
     # Marker-prefixed system strings use one byte per English character.  The wrapper expands
@@ -319,7 +319,7 @@ def _decode_traits(slpm):
 
 # ============================ 4. DIALOGUE + MENU (banks) ============================
 CD_BANKS = None
-def apply_banks(exe, packa, slpm, PATHS):
+def apply_banks(exe, packa, slpm, PATHS, mte=False):
     """Rebuild C/D dialogue banks with TR.TRANS (translated) + placeholders.
 
     Banks 2 and 3 remain within their original fixed archive entries: 16 sectors
@@ -333,7 +333,9 @@ def apply_banks(exe, packa, slpm, PATHS):
     src_alloc6=BANK7_JP_BASE-BANK6_BASE            # 4948: stock bank 6 region
     src_alloc7=0x80117cc8-BANK7_JP_BASE            # 3484: bounds the decode only
     dst_alloc6=BANK6_LIMIT-BANK6_BASE              # 5632: bank 6 owns the whole region
-    dst_alloc7=BANK7_CAVE_END-BANK7_CAVE           # 3140: free rodata cave
+    # In MTE builds the dict handler + strings occupy the cave tail from
+    # BP.MTE_BASE, so bank 7's allocation shrinks to end there.
+    dst_alloc7=(BP.MTE_BASE if mte else BANK7_CAVE_END)-BANK7_CAVE
     source_packa=bytes(packa)
     packa=bytearray(packa)
 
@@ -381,10 +383,19 @@ def apply_banks(exe, packa, slpm, PATHS):
         out=[]
         for i in range(N):
             mid=(bank<<12)|i
-            if mid in TR.TRANS: out.append(TP.author_to_tokens(TR.TRANS[mid]))
+            if mid in TR.TRANS:
+                toks=TP.author_to_tokens(TR.TRANS[mid])
+                # A stream without [ED] relies on decode flowing into the NEXT
+                # message, which only works if its nibble count happens to be
+                # even (build_block pads odd streams with a garbage nibble).
+                # Author such messages self-contained instead (see 0x3077).
+                if not toks or toks[-1]!=ED:
+                    raise SystemExit(f"msg {mid:#06x} does not end with ED")
+                out.append(toks)
             else:
                 ph=TP.placeholder(msgs[i]); ph=ph+[ED] if (not ph or ph[-1]!=ED) else ph; out.append(ph)
         blk=build_block(out,N)
+        print(f"  bank{bank}: {len(blk)}/{dst_alloc} bytes")
         if len(blk)>dst_alloc: raise SystemExit(f"bank{bank} OVERFLOW {len(blk)}>{dst_alloc}")
         if buf=="packa":
             packa[dst_fo:dst_fo+dst_alloc]=b"\xCC"*dst_alloc
@@ -514,7 +525,17 @@ def main(argv=None):
     parser.add_argument(
         "--input", metavar="BIN", help="source Japan Rev 1 MODE2/2352 BIN (default: auto-detect)"
     )
+    parser.add_argument(
+        "--mte", action="store_true",
+        help="build with the MTE dictionary (dict tokens in dialogue + runtime "
+             "handler in the cave tail); outputs build/SMT2_EN_MTE.*",
+    )
     args = parser.parse_args(argv)
+    global OUT_BIN, OUT_XDELTA
+    if args.mte:
+        TP.enable_mte()                  # dict matching in text_tokens (tree freqs + banks)
+        OUT_BIN = "build/SMT2_EN_MTE.bin"
+        OUT_XDELTA = "build/SMT2_EN_MTE.xdelta"
     input_bin = find_input_bin(args.input)
     bind = input_bin.read_bytes()
     
@@ -531,8 +552,8 @@ def main(argv=None):
     rdlogo0 = extract_from_bin(bind, RDLOGO_SECTOR, RDLOGO_SIZE)
     print("[1/5] kerning font...")
     font_slpm, widths = kern_font(slpm)
-    print("[2/5] building exe (VWF hook + English tree)...")
-    exe = build_exe(font_slpm, widths, slpm)
+    print("[2/5] building exe (VWF hook + English tree%s)..." % (" + MTE dict" if args.mte else ""))
+    exe = build_exe(font_slpm, widths, slpm, mte=args.mte)
     PATHS = BR.build_paths(0x80117ec4, 0x801187a4, exe)
     print("[3/5] applying name tables")
     apply_name_tables(exe, slpm, PATHS)
@@ -544,7 +565,7 @@ def main(argv=None):
     MT.rebuild_menu(exe, PATHS)
     SS.apply_sys(exe)                        # boot-safe system strings, kept in their original slots
     print("[4/5] applying dialogue + menu banks...")
-    packa = apply_banks(exe, packa0, slpm, PATHS)
+    packa = apply_banks(exe, packa0, slpm, PATHS, mte=args.mte)
     STATUS.patch_status_texture(packa, exe)
     print("[5/5] patching bin + xdelta...")
     ok, sectors = make_patch(input_bin, exe, packa, slpm, packa0, cmdinit, cmdinit0, rdlogo, rdlogo0)
