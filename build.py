@@ -4,7 +4,8 @@
 Run from the project root:  python build.py
 Outputs:  build/SMT2_EN.bin  and  SMT2_EN.xdelta
 
-Pipeline: kern font -> build exe (VWF hook + width table + English C/D tree) ->
+Pipeline: mine dictionary -> kern font -> build exe (VWF hook + width table +
+dictionary-compressed English C/D tree) ->
 translate ALL name tables (demons/races/spells/items/locations/NPCs/traits/drinks) ->
 translate menu table -> translate dialogue banks -> patch bin (EDC/ECC) -> xdelta.
 
@@ -12,7 +13,8 @@ All translation DATA lives in tools/: name_tables.py, translations.py, menu_tabl
 Add/extend translations there, then re-run this script.
 """
 import argparse
-import os, sys, struct, json
+import os, sys, struct, json, heapq
+from collections import Counter
 from pathlib import Path
 sys.path.insert(0, "tools")
 import build_en_tree as ET, block_rebuild as BR, build_prod_exe as BP, translate_pipeline as TP
@@ -43,7 +45,6 @@ BANK6_BASE = 0x80115bd8
 BANK6_LIMIT = 0x801171d8          # first foreign data (bitmask table) -- hard ceiling
 BANK7_JP_BASE = 0x80116f2c        # stock bank 7 base (source only; block is 684 B)
 BANK7_CAVE = 0x800d8500           # free tofu run: 0x800d8500..0x800d9144 (3140 B)
-BANK7_CAVE_END = 0x800d9144
 # Seek-routine sites that materialize bank 7's base (all share one lui).
 SEEK_B7_LUI = 0x80056b50          # lui   $a0, 0x8011
 SEEK_B7_ADDIU = 0x80056b54        # addiu $a3, $a0, 0x6f2c
@@ -52,6 +53,112 @@ DEFAULT_BIN_NAME = "Shin Megami Tensei II (Japan) (Rev 1).bin"
 EXPECTED_BIN_SIZE = 222_694_416
 OUT_BIN = "build/SMT2_EN.bin"
 OUT_XDELTA = "build/SMT2_EN.xdelta"
+
+# ============================ DICTIONARY MINING ============================
+# The compression dictionary is derived deterministically from the authored
+# dialogue on every build. It is never written to the source tree: the exact
+# same in-memory entry list configures tokenization, Huffman weights, and the
+# runtime expansion table.
+DICT_MIN_LEN = 3
+DICT_MAX_LEN = 16
+DICT_MIN_COUNT = 3
+DICT_TOKEN_NIBBLES = 3
+DICT_ROUND_PICKS = 8
+
+def dictionary_corpus_texts():
+    parts = []
+    for author in TR.TRANS.values():
+        for part in author:
+            if isinstance(part, str) and part not in TP.CTRL_NAME:
+                parts.append(part)
+    return parts
+
+def dictionary_encodable(s):
+    for ch in s:
+        try:
+            ET.fullwidth(ch)
+        except KeyError:
+            return False
+    return True
+
+def dictionary_char_nibble_costs(text):
+    """Approximate per-character cost with a 16-ary corpus Huffman tree."""
+    freqs = Counter(text)
+    freqs.pop("\x00", None)
+    items = list(freqs.items())
+    pad = (-(len(items) - 1)) % 15
+    heap = []
+    tree = {}
+    nid = 0
+    for ch, frequency in items:
+        tree[nid] = ("leaf", ch)
+        heapq.heappush(heap, (frequency, nid))
+        nid += 1
+    for _ in range(pad):
+        tree[nid] = ("leaf", None)
+        heapq.heappush(heap, (0.0, nid))
+        nid += 1
+    while len(heap) > 1:
+        children = [heapq.heappop(heap) for _ in range(min(16, len(heap)))]
+        tree[nid] = ("node", [child[1] for child in children])
+        heapq.heappush(heap, (sum(child[0] for child in children), nid))
+        nid += 1
+    depths = {}
+    def walk(node, depth):
+        kind, value = tree[node]
+        if kind == "leaf":
+            if value is not None:
+                depths[value] = max(depth, 1)
+            return
+        for child in value:
+            walk(child, depth + 1)
+    walk(heap[0][1], 0)
+    return depths
+
+def dictionary_runtime_cost(s):
+    return 4 + 2 * len(s) + 1  # pointer + fullwidth string + NUL
+
+def mine_dictionary(budget):
+    """Return dictionary entries selected from the current translation corpus."""
+    corpus = "\x00".join(dictionary_corpus_texts())
+    costs = dictionary_char_nibble_costs(corpus)
+    chosen = []
+    spent = 0
+    while spent < budget:
+        counts = Counter()
+        for length in range(DICT_MIN_LEN, DICT_MAX_LEN + 1):
+            for i in range(len(corpus) - length + 1):
+                candidate = corpus[i:i + length]
+                if "\x00" not in candidate:
+                    counts[candidate] += 1
+        scored = []
+        for candidate, count in counts.items():
+            if count < DICT_MIN_COUNT or not dictionary_encodable(candidate):
+                continue
+            saved = count * (
+                sum(costs.get(ch, 4) for ch in candidate) - DICT_TOKEN_NIBBLES
+            )
+            if saved <= 0:
+                continue
+            scored.append((
+                saved / dictionary_runtime_cost(candidate), saved, candidate, count
+            ))
+        scored.sort(reverse=True)
+        picked = 0
+        for _density, saved, candidate, _count in scored:
+            cost = dictionary_runtime_cost(candidate)
+            if spent + cost > budget or candidate not in corpus:
+                continue
+            chosen.append((candidate, saved))
+            spent += cost
+            corpus = corpus.replace(candidate, "\x00")
+            picked += 1
+            if picked >= DICT_ROUND_PICKS or spent >= budget:
+                break
+        if picked == 0:
+            break
+    chosen.sort(key=lambda entry: -entry[1])
+    return chosen, spent
 
 def foff(a): return (a - 0x80010000) + 0x800
 
@@ -93,7 +200,7 @@ def kern_font(slpm):
     return bytes(exe), widths
 
 # ============================ 2. BUILD EXE ============================
-def build_exe(font_slpm, widths, slpm, mte=False):
+def build_exe(font_slpm, widths, slpm):
     """VWF advance hooks + width table + English-only C/D tree. Returns exe bytearray."""
     exe = bytearray(font_slpm)
     def w32(a, v): struct.pack_into("<I", exe, foff(a), v)
@@ -144,7 +251,7 @@ def build_exe(font_slpm, widths, slpm, mte=False):
     for i in range(512): exe[foff(WTABLE)+i]=tbl[i]
     w32(0x80048b80, jj(CAVE))
     w32(0x8004827c, jj(RAW_CAVE))
-    BP.build_english_tree(exe, slpm, mte=mte)   # English C/D tree at 0x80117ec4 / 0x801187a4
+    BP.build_english_tree(exe, slpm)   # Dictionary-compressed C/D tree at 0x80117ec4 / 0x801187a4
     # NOTE: names are English, so the name decoder (0x80056e84 -> 0x80057fe4) uses the English
     # tree directly. No private Japanese-tree decoder is installed (that was for Japanese names).
     # Marker-prefixed system strings use one byte per English character.  The wrapper expands
@@ -319,7 +426,7 @@ def _decode_traits(slpm):
 
 # ============================ 4. DIALOGUE + MENU (banks) ============================
 CD_BANKS = None
-def apply_banks(exe, packa, slpm, PATHS, mte=False):
+def apply_banks(exe, packa, slpm, PATHS):
     """Rebuild C/D dialogue banks with TR.TRANS (translated) + placeholders.
 
     Banks 2 and 3 remain within their original fixed archive entries: 16 sectors
@@ -333,9 +440,9 @@ def apply_banks(exe, packa, slpm, PATHS, mte=False):
     src_alloc6=BANK7_JP_BASE-BANK6_BASE            # 4948: stock bank 6 region
     src_alloc7=0x80117cc8-BANK7_JP_BASE            # 3484: bounds the decode only
     dst_alloc6=BANK6_LIMIT-BANK6_BASE              # 5632: bank 6 owns the whole region
-    # In MTE builds the dict handler + strings occupy the cave tail from
-    # BP.MTE_BASE, so bank 7's allocation shrinks to end there.
-    dst_alloc7=(BP.MTE_BASE if mte else BANK7_CAVE_END)-BANK7_CAVE
+    # The dictionary handler + strings occupy the cave tail from BP.DICT_BASE,
+    # so bank 7's allocation ends there.
+    dst_alloc7=BP.DICT_BASE-BANK7_CAVE
     source_packa=bytes(packa)
     packa=bytearray(packa)
 
@@ -525,17 +632,17 @@ def main(argv=None):
     parser.add_argument(
         "--input", metavar="BIN", help="source Japan Rev 1 MODE2/2352 BIN (default: auto-detect)"
     )
-    parser.add_argument(
-        "--mte", action="store_true",
-        help="build with the MTE dictionary (dict tokens in dialogue + runtime "
-             "handler in the cave tail); outputs build/SMT2_EN_MTE.*",
-    )
     args = parser.parse_args(argv)
-    global OUT_BIN, OUT_XDELTA
-    if args.mte:
-        TP.enable_mte()                  # dict matching in text_tokens (tree freqs + banks)
-        OUT_BIN = "build/SMT2_EN_MTE.bin"
-        OUT_XDELTA = "build/SMT2_EN_MTE.xdelta"
+    print("[1/6] mining compression dictionary...")
+    dictionary, dictionary_bytes = mine_dictionary(BP.DICT_RUNTIME_BUDGET)
+    BP.configure_dictionary(dictionary)
+    TP.configure_dictionary(dictionary, BP.DICT_CODE_BASE)
+    estimated_nibbles = sum(weight for _text, weight in dictionary)
+    print(
+        f"  dictionary: {len(dictionary)} entries, "
+        f"{dictionary_bytes}/{BP.DICT_RUNTIME_BUDGET} bytes, "
+        f"~{estimated_nibbles / 2 / 1024:.1f} KB saved"
+    )
     input_bin = find_input_bin(args.input)
     bind = input_bin.read_bytes()
     
@@ -550,12 +657,12 @@ def main(argv=None):
     packa0 = extract_from_bin(bind, 68191, PACKA_SIZE)
     cmdinit0 = extract_from_bin(bind, CMDINIT_SECTOR, CMDINIT_SIZE)
     rdlogo0 = extract_from_bin(bind, RDLOGO_SECTOR, RDLOGO_SIZE)
-    print("[1/5] kerning font...")
+    print("[2/6] kerning font...")
     font_slpm, widths = kern_font(slpm)
-    print("[2/5] building exe (VWF hook + English tree%s)..." % (" + MTE dict" if args.mte else ""))
-    exe = build_exe(font_slpm, widths, slpm, mte=args.mte)
+    print("[3/6] building exe (VWF hook + dictionary-compressed English tree)...")
+    exe = build_exe(font_slpm, widths, slpm)
     PATHS = BR.build_paths(0x80117ec4, 0x801187a4, exe)
-    print("[3/5] applying name tables")
+    print("[4/6] applying name tables")
     apply_name_tables(exe, slpm, PATHS)
     cmdinit = bytearray(cmdinit0)
     apply_cmdinit_names(cmdinit)             # REAL new-game party names (CMDINIT.BIN)
@@ -564,10 +671,10 @@ def main(argv=None):
     rdlogo = RD.patch_rdlogo(rdlogo0)        # boot disclaimer -> English (fullwidth, repointed)
     MT.rebuild_menu(exe, PATHS)
     SS.apply_sys(exe)                        # boot-safe system strings, kept in their original slots
-    print("[4/5] applying dialogue + menu banks...")
-    packa = apply_banks(exe, packa0, slpm, PATHS, mte=args.mte)
+    print("[5/6] applying dialogue + menu banks...")
+    packa = apply_banks(exe, packa0, slpm, PATHS)
     STATUS.patch_status_texture(packa, exe)
-    print("[5/5] patching bin + xdelta...")
+    print("[6/6] patching bin + xdelta...")
     ok, sectors = make_patch(input_bin, exe, packa, slpm, packa0, cmdinit, cmdinit0, rdlogo, rdlogo0)
     print(f"DONE. {OUT_XDELTA} ok={ok}, {sectors} sectors, {os.path.getsize(OUT_XDELTA)} bytes")
 
