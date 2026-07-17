@@ -15,11 +15,30 @@ import build_en_tree as ET, block_rebuild as BR, build_prod_exe as BP
 CTRL_NAME={n:(struct.unpack(">H",n.encode("ascii"))[0],True) for n in
   "CR WT PG ED SY SN Fe TI IT FI FO NI AG SU MN KO OT ZK ZO MG MH PP AL SE TW".split()}
 
+# MTE dict matching (OFF by default; build.py --mte enables it). Case-sensitive
+# greedy longest-match: buckets are per first char, longest first, so the first
+# startswith hit is the longest match. Only dialogue text goes through
+# text_tokens -- the name/menu tables build their char tokens directly.
+_DCODE={}
+_DBYFIRST={}
+
+def enable_mte():
+    import en_dictionary as D
+    _DCODE.clear(); _DBYFIRST.clear()
+    _DCODE.update(D.code_map())
+    for s in sorted(_DCODE, key=len, reverse=True):
+        _DBYFIRST.setdefault(s[0], []).append(s)
+
 def text_tokens(s):
-    out=[]
-    for ch in s:
-        try: out.append((ET.fullwidth(ch),False))
-        except KeyError: out.append((ET.fullwidth(' '),False))
+    out=[]; i=0
+    while i<len(s):
+        for cand in _DBYFIRST.get(s[i],()):
+            if s.startswith(cand,i):
+                out.append((_DCODE[cand],True)); i+=len(cand); break
+        else:
+            try: out.append((ET.fullwidth(s[i]),False))
+            except KeyError: out.append((ET.fullwidth(' '),False))
+            i+=1
     return out
 
 def author_to_tokens(author):
