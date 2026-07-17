@@ -27,6 +27,10 @@ python -m pip install pyxdelta
    python build.py
    ```
 
+   The build automatically mines its dialogue compression dictionary from the
+   current translation corpus. The generated entries remain in memory and do
+   not create or modify translation-source files.
+
    The usual Redump-style filename, `Shin Megami Tensei II (Japan) (Rev 1).bin`,
    is detected automatically. If the file has another name, it will still be
    used when it is the only root-level `.bin`; otherwise specify it explicitly:
