@@ -1,36 +1,52 @@
-"""Production exe: kerned font + VWF advance hook + English-only C/D Huffman tree
-(chars + control codes with correct dispatch indices, optionally + MTE dictionary).
-A/B tree (banks 4,5) left untouched so Japanese negotiation still decodes.
+"""Production exe: kerned font, VWF hook, and dictionary-compressed C/D tree.
 
-MTE (mte=True): each en_dictionary entry is a control-flagged leaf (struct=0xC000|6,
-sym=0x8540+i). The engine's control dispatch jals jump-table slot 6, whose 16-byte
-stub (a lone default handler in the stock exe, unreferenced by any tree we install)
-jals our handler, which looks up the expansion string and tail-jumps the stock
-string-append routine 0x80058244 (the Fe/name-insert path), returning through the
-stub to the stock epilogue."""
-import struct, json
+A/B (banks 4 and 5) remains untouched so Japanese negotiation still decodes.
+Each mined dictionary entry is a control-flagged Huffman leaf (struct=0xC000|6,
+symbol=0x8540+i). The slot-6 stub calls an expansion handler, which looks up the
+full string and tail-jumps the stock append routine used by name inserts."""
+import struct
 import build_en_tree as ET
-import en_dictionary as D
 
 STRUCT=0x80117ec4; SYM=0x801187a4; STCAP=SYM-STRUCT
 
-# ---- MTE runtime layout -----------------------------------------------------------
+# ---- Dictionary runtime layout ----------------------------------------------------
 # Lives in the tail of the rodata font-placeholder cave, AFTER bank 7's relocated
-# block (build.py caps bank 7 at MTE_BASE when building with --mte). The freed JP
+# block (build.py caps bank 7 at DICT_BASE). The freed JP
 # map-name block at 0x80016124 was considered and rejected: it contains live
 # sub-structures (a pointer table at 0x8001628c and 18 code reads of 0x800162c8).
 DICT_WEIGHT_MULT = 1.5                 # dict-vs-char Huffman weight balance
 NAME_CORPUS_WEIGHT = 8                 # extra weight for name/menu-table chars (char-only consumers)
-MTE_BASE  = 0x800d8880                 # bank 7's allocation ends here in MTE builds
-MTE_H     = MTE_BASE                   # handler code (9 instructions, padded to 0x40)
-DICT_PTRS = MTE_BASE + 0x40            # expansion-string pointer table
+DICT_CODE_BASE = 0x8540
+DICT_JT_INDEX = 6
+DICT_BASE  = 0x800d8880                # bank 7's allocation ends here
+DICT_HANDLER = DICT_BASE               # handler code, padded to 0x40
+DICT_PTRS = DICT_BASE + 0x40           # expansion-string pointer table
 CAVE_END  = 0x800d9144
+DICT_RUNTIME_BUDGET = CAVE_END-DICT_PTRS
 JT        = 0x800132b4                 # 205-entry control dispatch jump table
 STUBS     = 0x80058358                 # 16-byte dispatch stubs (slot i = STUBS+i*0x10)
 APPEND    = 0x80058244                 # stock append: a0 = null-terminated SJIS
 EPILOGUE  = 0x80059044                 # stock dispatch epilogue
 DECODED_SYM = 0x801d15de               # decoder's just-decoded symbol global
 STOCK6    = 0x80059ce4                 # stock slot-6 handler = event-script choice-menu op
+
+_DICT_ENTRIES = []
+_DICT_CODE_MAP = {}
+
+def configure_dictionary(entries):
+    """Install the one build-wide mined entry list without writing generated files."""
+    global _DICT_ENTRIES, _DICT_CODE_MAP
+    entries = list(entries)
+    strings = [s for s,_weight in entries]
+    if len(strings) != len(set(strings)):
+        raise ValueError("dictionary entries must be unique")
+    runtime_bytes = sum(4 + 2*len(s) + 1 for s in strings)
+    if runtime_bytes > DICT_RUNTIME_BUDGET:
+        raise ValueError(
+            f"dictionary runtime overflow: {runtime_bytes}>{DICT_RUNTIME_BUDGET}"
+        )
+    _DICT_ENTRIES = entries
+    _DICT_CODE_MAP = {s:DICT_CODE_BASE+i for i,s in enumerate(strings)}
 
 def _foff(a): return (a-0x80010000)+0x800
 
@@ -49,7 +65,7 @@ def control_index_map(slpm):
     return cidx
 
 def _corpus_freqs(cidx):
-    """Huffman weights measured from the real content this tree encodes (MTE mode).
+    """Huffman weights measured from the dictionary-tokenized corpus.
 
     Chars and dict tokens are counted by tokenizing every authored translation;
     the name/menu tables (char-only consumers with tight per-table byte budgets)
@@ -86,25 +102,22 @@ def _corpus_freqs(cidx):
     for sym,n in chars.items(): freqs[sym]=freqs.get(sym,0.5)+n
     for code in cidx:                                  # controls: ('C',code)
         freqs[('C',code)]=ET.CONTROLS.get(code,1)+ctrls.get(code,0)
-    dcode=D.code_map()
-    for s,_w in D.all_entries():                       # dict: ('D',code)
-        freqs[('D',dcode[s])]=max(dicts.get(dcode[s],0)*DICT_WEIGHT_MULT,0.1)
+    for s,_weight in _DICT_ENTRIES:                    # dict: ('D',code)
+        code=_DICT_CODE_MAP[s]
+        freqs[('D',code)]=max(dicts.get(code,0)*DICT_WEIGHT_MULT,0.1)
     return freqs
 
-def build_english_tree(exe, slpm, mte=False):
-    """Lay out an English-only C/D tree (chars + controls [+ MTE dict]) into exe."""
+def build_english_tree(exe, slpm):
+    """Lay out the dictionary-compressed English-only C/D tree."""
     import heapq
     from collections import deque
     def w16(a,v): struct.pack_into("<H",exe,_foff(a),v)
+    if not _DICT_ENTRIES:
+        raise RuntimeError("compression dictionary was not configured")
     cidx=control_index_map(slpm)
-    if mte:
-        if D.DICT_JT_INDEX in cidx.values():
-            raise SystemExit(f"jump-table index {D.DICT_JT_INDEX} is not free after all")
-        freqs=_corpus_freqs(cidx)
-    else:
-        freqs=ET.build_freqs(150000)                  # char symbols (int keys)
-        for code,idx in cidx.items():                 # controls: ('C',code)
-            freqs[('C',code)]=ET.CONTROLS.get(code,1)
+    if DICT_JT_INDEX in cidx.values():
+        raise SystemExit(f"jump-table index {DICT_JT_INDEX} is not free after all")
+    freqs=_corpus_freqs(cidx)
     # d-ary huffman
     items=list(freqs.items()); L=len(items); pad=(-(L-1))%15
     heap=[]; tree={}; nid=0
@@ -135,7 +148,7 @@ def build_english_tree(exe, slpm, mte=False):
         if isinstance(sym,tuple):
             if sym[0]=='C':  # control
                 return (0xC000|cidx[sym[1]], sym[1])
-            return (0xC000|D.DICT_JT_INDEX, sym[1])  # ('D', dict code)
+            return (0xC000|DICT_JT_INDEX, sym[1])  # ('D', dict code)
         return (0x8000, sym)
     for i,base in off.items():
         for nib in range(16):
@@ -147,14 +160,13 @@ def build_english_tree(exe, slpm, mte=False):
                 else: st,sy=off[c],0
             else: st,sy=0x7fff,0
             w16(STRUCT+ea,st); w16(SYM+ea,sy)
-    if mte:
-        _install_mte_runtime(exe)
+    _install_dictionary_runtime(exe)
     return codes, cidx
 
-def _install_mte_runtime(exe):
+def _install_dictionary_runtime(exe):
     """Write the dict handler, pointer table, expansion strings, and stub 6."""
     def w32(a,v): struct.pack_into("<I",exe,_foff(a),v)
-    entries=D.all_entries()
+    entries=_DICT_ENTRIES
     # Expansion strings (fullwidth SJIS, single-0 terminated) + pointer table.
     strs_base=DICT_PTRS+4*len(entries)
     ptrs=[]; blob=bytearray()
@@ -164,7 +176,7 @@ def _install_mte_runtime(exe):
         blob.append(0)
     end=strs_base+len(blob)
     if end>CAVE_END:
-        raise SystemExit(f"MTE strings overflow cave: {end:#x} > {CAVE_END:#x}")
+        raise SystemExit(f"dictionary strings overflow cave: {end:#x} > {CAVE_END:#x}")
     for i,p in enumerate(ptrs): w32(DICT_PTRS+i*4,p)
     exe[_foff(strs_base):_foff(strs_base)+len(blob)]=blob
     # Handler.  CRITICAL: jump-table slot 6 is NOT free at runtime -- it is the
@@ -194,7 +206,7 @@ def _install_mte_runtime(exe):
     handler=[
         LUI(V0,(DECODED_SYM>>16)&0xffff),
         LHU(V1,DECODED_SYM&0xffff,V0),           # v1 = decoded symbol
-        ORI(T0,ZERO,D.DICT_CODE_BASE),           # load-delay filler
+        ORI(T0,ZERO,DICT_CODE_BASE),             # load-delay filler
         SUBU(T1,V1,T0),                          # t1 = sym - 0x8540
         SLTIU(T2,T1,len(entries)),               # dict code?
         BEQ(T2,ZERO,L_STOCK-6),                  # no -> stock choice-menu op
@@ -208,9 +220,9 @@ def _install_mte_runtime(exe):
         J(STOCK6),                               # L_STOCK: ra still = stub+8
         NOP,
     ]
-    assert MTE_H+len(handler)*4<=DICT_PTRS
-    for i,wd in enumerate(handler): w32(MTE_H+i*4,wd)
+    assert DICT_HANDLER+len(handler)*4<=DICT_PTRS
+    for i,wd in enumerate(handler): w32(DICT_HANDLER+i*4,wd)
     # Repurpose the (tree-unreferenced) dispatch stub 6.
-    stub=STUBS+D.DICT_JT_INDEX*0x10
-    w32(stub+0,JAL(MTE_H)); w32(stub+4,NOP); w32(stub+8,J(EPILOGUE)); w32(stub+12,NOP)
-    w32(JT+D.DICT_JT_INDEX*4,stub)   # already points here in the stock exe; keep explicit
+    stub=STUBS+DICT_JT_INDEX*0x10
+    w32(stub+0,JAL(DICT_HANDLER)); w32(stub+4,NOP); w32(stub+8,J(EPILOGUE)); w32(stub+12,NOP)
+    w32(JT+DICT_JT_INDEX*4,stub)   # already points here in the stock exe; keep explicit
