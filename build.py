@@ -587,9 +587,14 @@ def decode_ab_block(block, slpm):
     count=(data_offset-2)//2
     offsets=list(struct.unpack_from(f"<{count}H",block,2))
     unique=sorted(set(offsets))
-    fill=block.find(b"\xCC"*16,data_offset+unique[-1])
-    if fill<0:
+    # Stock blocks use 0xCC fill; rebuilt blocks use zero fill because root
+    # nibble 0 is deliberately invalid. Zero fill cannot be mistaken for a
+    # real encoded suffix when the final stream happens to end in 0xCC bytes.
+    fills=[pos for pattern in (b"\x00"*16,b"\xCC"*16)
+           if (pos:=block.find(pattern,data_offset+unique[-1]))>=0]
+    if not fills:
         raise SystemExit("could not find A/B-bank fill after final stream")
+    fill=min(fills)
     end_for={
         offset:(unique[i+1] if i+1<len(unique) else fill-data_offset)
         for i,offset in enumerate(unique)
@@ -688,7 +693,7 @@ def apply_ab_banks(exe, packa, slpm):
         print(f"  bank{bank}: {len(block)}/{allocation} bytes")
         if len(block)>allocation:
             raise SystemExit(f"bank{bank} OVERFLOW {len(block)}>{allocation}")
-        packa[base:base+allocation]=b"\xCC"*allocation
+        packa[base:base+allocation]=b"\x00"*allocation
         packa[base:base+len(block)]=block
     return packa
 
