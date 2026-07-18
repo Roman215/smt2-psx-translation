@@ -8,6 +8,10 @@ build tooling. It does not contain, distribute, or download game data.
 
 - Python 3.10 or newer
 - [`pyxdelta`](https://pypi.org/project/pyxdelta/)
+- [FFmpeg](https://ffmpeg.org/download.html) available on `PATH`
+- [`psxavenc` 0.3.1](https://github.com/WonderfulToolchain/psxavenc/releases/tag/v0.3.1)
+  available on `PATH`, placed at `build/psxavenc/bin/psxavenc.exe`, or supplied
+  with `--psxavenc PATH`
 - A legally obtained, verified **Shin Megami Tensei II (Japan) (Rev 1)**
   MODE2/2352 BIN image (222,694,416 bytes)
 
@@ -45,6 +49,13 @@ python -m pip install pyxdelta
    - `build/SMT2_EN.bin` — rebuilt game image
    - `build/SMT2_EN.xdelta` — patch from the supplied source BIN
 
+   The build also writes `build/OPENING_EN.str`, the generated fixed-size
+   English opening payload. It decodes the movie from the supplied disc,
+   replaces the baked-in Japanese crawl using the game's own font, and
+   re-encodes it at the original 320x240, 15 fps, 10-sectors-per-frame layout.
+   Pass `--skip-opening` only for development builds that should retain the
+   Japanese movie.
+
 Apply the xdelta patch to the same verified source image. The matching CUE can
 then be copied or renamed to refer to the patched BIN.
 
@@ -60,6 +71,8 @@ then be copied or renamed to refer to the patched BIN.
   and `rdlogo.py` — codec and binary-patching support used by the build.
 - `tools/dump_full_script.py` — optional developer utility that dumps the
   source dialogue directly from a supplied BIN.
+- `tools/opening_movie.py` rebuilds the fixed-layout opening STR with the
+  translated crawl.
 
 ## Developer utility
 
