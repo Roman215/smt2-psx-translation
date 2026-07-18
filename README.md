@@ -15,7 +15,6 @@ build tooling. It does not contain, distribute, or download game data.
 ## Requirements
 
 - Python 3.10 or newer
-- [`pyxdelta`](https://pypi.org/project/pyxdelta/)
 - [FFmpeg](https://ffmpeg.org/download.html) available on `PATH`
 - [`psxavenc` 0.3.1](https://github.com/WonderfulToolchain/psxavenc/releases/tag/v0.3.1)
   available on `PATH`, placed at `build/psxavenc/bin/psxavenc.exe`, or supplied
@@ -23,7 +22,8 @@ build tooling. It does not contain, distribute, or download game data.
 - A legally obtained, verified **Shin Megami Tensei II (Japan) (Rev 1)**
   MODE2/2352 BIN image (222,694,416 bytes)
 
-Install the Python dependency once:
+[`pyxdelta`](https://pypi.org/project/pyxdelta/) is optional and is needed only
+when building an xdelta patch:
 
 ```powershell
 python -m pip install pyxdelta
@@ -51,27 +51,39 @@ python -m pip install pyxdelta
    python build.py --input "my-smt2-rev1.bin"
    ```
 
-3. The build writes these generated files, which are intentionally ignored by
-   Git:
+3. By default, the build writes these generated files, which are intentionally
+   ignored by Git:
 
    - `build/SMT2_EN.bin` — rebuilt game image
-   - `build/SMT2_EN.xdelta` — patch from the supplied source BIN
+   - `build/OPENING_EN.str` — generated fixed-size English opening payload
 
-   The build also writes `build/OPENING_EN.str`, the generated fixed-size
-   English opening payload. It decodes the movie from the supplied disc,
-   replaces the baked-in Japanese crawl using the game's own font, and
-   re-encodes it at the original 320x240, 15 fps, 10-sectors-per-frame layout.
-   Pass `--skip-opening` only for development builds that should retain the
-   Japanese movie.
+   To write the generated artifacts somewhere else, pass `--output-dir`:
 
-Apply the xdelta patch to the same verified source image. The matching CUE can
-then be copied or renamed to refer to the patched BIN.
+   ```powershell
+   python build.py --output-dir "out"
+   ```
+
+   The opening build decodes the movie from the supplied disc, replaces the
+   baked-in Japanese crawl using the game's own font, and re-encodes it at the
+   original 320x240, 15 fps, 10-sectors-per-frame layout. Pass `--skip-opening`
+   only for development builds that should retain the Japanese movie.
+
+4. To additionally create `SMT2_EN.xdelta` from the supplied source BIN, install
+   `pyxdelta` as shown above and pass `--xdelta`:
+
+   ```powershell
+   python build.py --xdelta
+   ```
+
+The matching CUE can be copied or renamed to refer to `SMT2_EN.bin`. If you
+create an xdelta for distribution, it must be applied to the same verified
+source image.
 
 ## Project layout
 
 - `build.py` — full reproducible build; extracts the needed executable and data
   files directly from the supplied BIN, patches them, fixes Mode 2 EDC/ECC, and
-  creates the xdelta.
+  optionally creates an xdelta patch.
 - `tools/translations.py` — dialogue translation source.
 - `tools/name_tables.py`, `menu_table.py`, `sys_strings.py`, and `map_names.py`
   — English UI, terminology, and location data.

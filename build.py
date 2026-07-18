@@ -1,19 +1,21 @@
 #!/usr/bin/env python3
-"""SMT2 English translation — master build. Regenerates the xdelta patch from scratch.
+"""SMT2 English translation — master build.
 
 Run from the project root:  python build.py
-Outputs:  build/SMT2_EN.bin  and  SMT2_EN.xdelta
+Default output:  build/SMT2_EN.bin
 
 Pipeline: mine dictionary -> kern font -> build exe (VWF hook + width table +
 dictionary-compressed English C/D tree) -> rebuild English A/B tree ->
 translate ALL name tables (demons/races/spells/items/locations/NPCs/traits/drinks) ->
-translate menu table -> translate dialogue banks -> patch bin (EDC/ECC) -> xdelta.
+translate menu table -> translate dialogue banks -> patch bin (EDC/ECC).
+
+Pass --xdelta to additionally create a patch from the supplied source BIN.
 
 All translation DATA lives in tools/: name_tables.py, translations.py, menu_table.py.
 Add/extend translations there, then re-run this script.
 """
 import argparse
-import os, sys, struct, json, heapq
+import sys, struct, json, heapq
 from collections import Counter
 from pathlib import Path
 sys.path.insert(0, "tools")
@@ -22,7 +24,6 @@ import name_tables as NT, translations as TR, menu_table as MT, sys_strings as S
 import rdlogo as RD, map_names as MN, status_screen as STATUS
 import opening_movie as OM
 from cdecc import fix_mode2form1
-import pyxdelta
 
 CMDINIT_SECTOR = 67152                        # CMDINIT.BIN base sector in the bin
 RDLOGO_SECTOR = 67181                         # RDLOGO.BIN base sector in the bin
@@ -52,8 +53,9 @@ SEEK_B7_ADDIU = 0x80056b54        # addiu $a3, $a0, 0x6f2c
 SEEK_B7_LHU = 0x80056b70          # lhu   $v1, 0x6f2c($a0)
 DEFAULT_BIN_NAME = "Shin Megami Tensei II (Japan) (Rev 1).bin"
 EXPECTED_BIN_SIZE = 222_694_416
-OUT_BIN = "build/SMT2_EN.bin"
-OUT_XDELTA = "build/SMT2_EN.xdelta"
+DEFAULT_OUTPUT_DIR = "build"
+OUTPUT_BIN_NAME = "SMT2_EN.bin"
+OUTPUT_XDELTA_NAME = "SMT2_EN.xdelta"
 
 # ============================ DICTIONARY MINING ============================
 # The compression dictionary is derived deterministically from the authored
@@ -1037,9 +1039,10 @@ def apply_banks(exe, packa, slpm, PATHS):
     verify_ab_banks(exe,packa,ab_specs,ab_authored)
     return packa
 
-# ============================ 5. PATCH + XDELTA ============================
-def make_patch(
+# ============================ 5. PATCH OUTPUT ============================
+def write_patched_bin(
     input_bin,
+    output_bin,
     exe,
     packa,
     slpm,
@@ -1122,15 +1125,35 @@ def make_patch(
             aff.add(sec)
     for sec in aff:
         so=sec*2352; s=bytearray(bind[so:so+2352]); fix_mode2form1(s); bind[so:so+2352]=s
-    os.makedirs("build", exist_ok=True)
-    open(OUT_BIN,"wb").write(bytes(bind))
+    output_bin = Path(output_bin)
+    output_bin.parent.mkdir(parents=True, exist_ok=True)
+    output_bin.write_bytes(bind)
+    return len(aff)
+
+def require_pyxdelta():
+    """Load the optional patch dependency only when --xdelta is requested."""
+    try:
+        import pyxdelta
+    except ModuleNotFoundError as exc:
+        if exc.name != "pyxdelta":
+            raise
+        raise SystemExit(
+            "--xdelta requires the optional pyxdelta package. "
+            "Install it with: python -m pip install pyxdelta"
+        ) from exc
+    return pyxdelta
+
+def make_xdelta(pyxdelta, input_bin, output_bin, output_xdelta):
+    """Create an optional xdelta patch for an already-built image."""
     # pyxdelta refuses to replace an existing output file.  Builds are
     # reproducible, so discard only the previous generated patch first.
-    out_xdelta = Path(OUT_XDELTA)
-    if out_xdelta.exists():
-        out_xdelta.unlink()
-    ok=pyxdelta.run(str(input_bin), OUT_BIN, OUT_XDELTA)
-    return ok, len(aff)
+    output_xdelta = Path(output_xdelta)
+    if output_xdelta.exists():
+        output_xdelta.unlink()
+    ok = pyxdelta.run(str(input_bin), str(output_bin), str(output_xdelta))
+    if not ok:
+        raise SystemExit("pyxdelta failed to create the requested patch")
+    return output_xdelta
 
 def extract_from_bin(bin_data, base_sector, file_size):
     """Extracts a file directly from the raw bin data."""
@@ -1174,7 +1197,7 @@ def find_input_bin(requested=None):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(
-        description="Build the SMT2 PSX English translation and an xdelta patch."
+        description="Build the SMT2 PSX English translation."
     )
     parser.add_argument(
         "--input", metavar="BIN", help="source Japan Rev 1 MODE2/2352 BIN (default: auto-detect)"
@@ -1188,7 +1211,25 @@ def main(argv=None):
     parser.add_argument(
         "--skip-opening", action="store_true", help="leave the Japanese opening movie unchanged"
     )
+    parser.add_argument(
+        "--output-dir",
+        metavar="DIR",
+        default=DEFAULT_OUTPUT_DIR,
+        help=f"directory for generated artifacts (default: {DEFAULT_OUTPUT_DIR})",
+    )
+    parser.add_argument(
+        "--xdelta",
+        action="store_true",
+        help="also create SMT2_EN.xdelta (requires the optional pyxdelta package)",
+    )
     args = parser.parse_args(argv)
+    pyxdelta = require_pyxdelta() if args.xdelta else None
+    output_dir = Path(args.output_dir).expanduser()
+    if output_dir.exists() and not output_dir.is_dir():
+        raise SystemExit(f"Output directory is not a directory: {output_dir}")
+    output_dir.mkdir(parents=True, exist_ok=True)
+    output_bin = output_dir / OUTPUT_BIN_NAME
+    output_xdelta = output_dir / OUTPUT_XDELTA_NAME
     print("[1/7] mining compression dictionaries...")
     dictionary, dictionary_bytes = mine_dictionary(BP.DICT_RUNTIME_BUDGET)
     BP.configure_dictionary(dictionary)
@@ -1206,6 +1247,8 @@ def main(argv=None):
     ab_candidates = [e for e in ab_candidates if e[0] not in cd_strings]
     print(f"  A/B dictionary: {len(ab_candidates)} candidate entries")
     input_bin = find_input_bin(args.input)
+    if output_bin.resolve() == input_bin.resolve():
+        raise SystemExit(f"Refusing to overwrite the source BIN: {input_bin}")
     bind = input_bin.read_bytes()
     
     # You will need to know the exact file sizes for this to work
@@ -1235,7 +1278,7 @@ def main(argv=None):
             input_bin,
             font_slpm,
             widths,
-            Path("build/OPENING_EN.str"),
+            output_dir / "OPENING_EN.str",
             ffmpeg=ffmpeg,
             psxavenc=psxavenc,
         )
@@ -1273,9 +1316,10 @@ def main(argv=None):
     print("[6/7] applying dialogue + menu banks...")
     packa = apply_banks(exe, packa0, slpm, PATHS)
     STATUS.patch_status_texture(packa, exe)
-    print("[7/7] patching bin + xdelta...")
-    ok, sectors = make_patch(
+    print("[7/7] writing patched BIN...")
+    sectors = write_patched_bin(
         input_bin,
+        output_bin,
         exe,
         packa,
         slpm,
@@ -1286,7 +1330,13 @@ def main(argv=None):
         rdlogo0,
         opening,
     )
-    print(f"DONE. {OUT_XDELTA} ok={ok}, {sectors} sectors, {os.path.getsize(OUT_XDELTA)} bytes")
+    print(f"DONE. {output_bin}, {sectors} patched sectors, {output_bin.stat().st_size} bytes")
+    if pyxdelta is not None:
+        print("Generating optional xdelta patch...")
+        make_xdelta(pyxdelta, input_bin, output_bin, output_xdelta)
+        print(f"       {output_xdelta}, {output_xdelta.stat().st_size} bytes")
+    elif output_xdelta.exists():
+        print(f"NOTE: existing {output_xdelta} was not updated; use --xdelta to regenerate it.")
 
 if __name__ == "__main__":
     main()
