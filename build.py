@@ -164,9 +164,20 @@ def mine_dictionary(budget):
 
 def foff(a): return (a - 0x80010000) + 0x800
 
+# Punctuation kerned in both fullwidth fonts (names/dialogue repertoire).
+KERN_PUNCT = [0x8149,0x8148,0x8144,0x8143,0x8146,0x8147,0x8151,0x815e,0x8184,0x8166,0x8165,0x8168,
+              0x8167,0x815d,0x8169,0x816a,0x8163,0x8160,0x8192,0x817b,0x8195,0x8193]
+
 # ============================ 1. FONT KERNING ============================
 def kern_font(slpm):
-    """Left-kern the 12x12 Latin/punct glyphs; return (modified slpm bytes, widths dict keyed by sidx)."""
+    """Left-kern the 12x12 and 10x10 Latin/punct glyphs.
+
+    Returns (modified slpm bytes, 12px widths, 10px widths), width dicts keyed
+    by sidx.  The 12x12 font is dialogue/menus; the 10x10 font draws the
+    party/status name plates through the object compositor (see
+    _install_obj_vwf).  Digits stay unkerned in the 10x10 so numeric columns
+    in screens sharing that font keep their fixed grid.
+    """
     exe = bytearray(slpm)
     FONT, W, H, GB = 0x800d4188, 12, 12, 18
     def get_glyph(idx):
@@ -195,14 +206,37 @@ def kern_font(slpm):
     for c in range(0x8260,0x827a): widths[sidx(c)] = kern(sidx(c))   # A-Z
     for c in range(0x8281,0x829b): widths[sidx(c)] = kern(sidx(c))   # a-z
     for c in range(0x824f,0x8259): widths[sidx(c)] = kern(sidx(c))   # 0-9
-    PUNCT = [0x8149,0x8148,0x8144,0x8143,0x8146,0x8147,0x8151,0x815e,0x8184,0x8166,0x8165,0x8168,
-             0x8167,0x815d,0x8169,0x816a,0x8163,0x8160,0x8192,0x817b,0x8195,0x8193]
-    for c in PUNCT: widths[sidx(c)] = kern(sidx(c))
+    for c in KERN_PUNCT: widths[sidx(c)] = kern(sidx(c))
     widths[0] = 4  # space
-    return bytes(exe), widths
+
+    # 10x10 font (0x800d25d8, SJIS rows 0x81-0x83 only).  100 bits per glyph, so
+    # glyph boundaries are not byte-aligned -- address pixels by absolute bit.
+    F10, W10, H10 = 0x800d25d8, 10, 10
+    def bit10(k): return (exe[foff(F10)+(k>>3)] >> (7-(k&7))) & 1
+    def setbit10(k, v):
+        mask = 1 << (7-(k&7))
+        if v: exe[foff(F10)+(k>>3)] |= mask
+        else: exe[foff(F10)+(k>>3)] &= ~mask & 0xff
+    def kern10(idx, left=0, sp=1):
+        gb = idx*W10*H10
+        rows = [[bit10(gb+y*W10+x) for x in range(W10)] for y in range(H10)]
+        cols = [x for y in range(H10) for x in range(W10) if rows[y][x]]
+        if not cols: return 4
+        lo_c, hi_c = min(cols), max(cols); shift = lo_c-left
+        for y in range(H10):
+            for x in range(W10):
+                nx = x+shift
+                setbit10(gb+y*W10+x, rows[y][nx] if 0 <= nx < W10 else 0)
+        return (hi_c-lo_c+1)+left+sp
+    widths10 = {}
+    for c in range(0x8260,0x827a): widths10[sidx(c)] = kern10(sidx(c))   # A-Z
+    for c in range(0x8281,0x829b): widths10[sidx(c)] = kern10(sidx(c))   # a-z
+    for c in KERN_PUNCT: widths10[sidx(c)] = kern10(sidx(c))
+    widths10[0] = 4  # space
+    return bytes(exe), widths, widths10
 
 # ============================ 2. BUILD EXE ============================
-def build_exe(font_slpm, widths, slpm):
+def build_exe(font_slpm, widths, widths10, slpm):
     """VWF advance hooks + width table + English-only C/D tree. Returns exe bytearray."""
     exe = bytearray(font_slpm)
     def w32(a, v): struct.pack_into("<I", exe, foff(a), v)
@@ -237,48 +271,6 @@ def build_exe(font_slpm, widths, slpm):
     raw_hook[raw_ib]=beq('t8','zero',((RAW_CAVE+raw_id*4)-((RAW_CAVE+raw_ib*4)+4))>>2)
     for i,wd in enumerate(raw_hook): w32(RAW_CAVE+i*4, wd)
 
-    # The object compositor at 0x8004c5ac (Equip screen and other 4bpp menu
-    # captions; ~200 call sites via the string walker 0x8004c7c0) has a THIRD
-    # independent fixed-width advance: penX(obj+0xa) += the font's full cell
-    # width from the per-font size table 0x800f853c.  English through it lands
-    # on a 12px grid and overruns the 96px name buffers after 8 glyphs.  The
-    # character is in no register at the advance, so the fix is two-staged:
-    # a wrapper on the glyph-index lookup call (0x8004c604: jal 0x8004c55c,
-    # a0 = char ptr) records the char's VWF width in a scratch byte, and the
-    # advance site (0x8004c78c) consumes it.  Gated to 12px-cell fonts so the
-    # 8x8/8x10/10x10 users of this printer keep their stock metrics.
-    OBJ_A, OBJ_B, OBJ_SCR = 0x800d8290, 0x800d82d4, 0x800d72d4
-    OBJ_LOOKUP, OBJ_ADV_RET = 0x8004c55c, 0x8004c794
-    sb=lambda rt,o,rs:I(0x28,rs,rt,o); bne=lambda rs,rt,o:I(0x05,rs,rt,o)
-    jal=lambda t:(0x03<<26)|((t>>2)&0x03ffffff)
-    obj_a=[lui('t9',hi(OBJ_SCR)), sb('zero',lo(OBJ_SCR),'t9'),
-           lbu('t6',0,'a0'), lbu('t7',1,'a0'),
-           addiu('t6','t6',-0x81), sltiu('t8','t6',2),
-           0,                                   # beq t8,zero -> OUT (patched below)
-           sll('t6','t6',8),
-           addu('t6','t6','t7'), lui('t8',hi(WTABLE)), addiu('t8','t8',lo(WTABLE)),
-           addu('t8','t8','t6'), lbu('t8',0,'t8'), 0,
-           sb('t8',lo(OBJ_SCR),'t9'),
-           jj(OBJ_LOOKUP), 0]
-    obj_a[6]=beq('t8','zero',(15-(6+1)))
-    obj_b=[lui('t9',hi(OBJ_SCR)), lbu('t8',lo(OBJ_SCR),'t9'),
-           addiu('t9','t6',-12), bne('t9','zero',(8-(3+1))), 0,
-           beq('t8','zero',(8-(5+1))), 0,
-           addu('t6','t8','zero'),
-           lhu('v0',0xa,'s2'),
-           jj(OBJ_ADV_RET), 0]
-    if len(obj_a)!=17 or len(obj_b)!=11 or OBJ_A+len(obj_a)*4!=OBJ_B or OBJ_B+len(obj_b)*4!=0x800d8300:
-        raise SystemExit("object-printer VWF cave layout changed; re-check reservations")
-    for addr, expect in ((0x8004c604,0x0c013157),   # jal 0x8004c55c
-                         (0x8004c78c,0x9642000a),   # lhu $v0, 0xa($s2)
-                         (0x8004c790,0x00000000)):  # delay-slot nop we rely on
-        got=struct.unpack_from("<I",exe,foff(addr))[0]
-        if got!=expect:
-            raise SystemExit(f"object-printer site {addr:#x}: expected {expect:#010x}, got {got:#010x}")
-    for i,wd in enumerate(obj_a): w32(OBJ_A+i*4, wd)
-    for i,wd in enumerate(obj_b): w32(OBJ_B+i*4, wd)
-    w32(0x8004c604, jal(OBJ_A))
-    w32(0x8004c78c, jj(OBJ_B))
     tbl=bytearray([12])*512
     def sidx(code):
         b1,b2=code>>8,code&0xff; row=(b1-0x81) if b1<0xa0 else (b1-0xc1); return (b2-0x40)+row*189
@@ -290,13 +282,15 @@ def build_exe(font_slpm, widths, slpm):
     for c in range(0x8260,0x827a): setw(c)
     for c in range(0x8281,0x829b): setw(c)
     for c in range(0x824f,0x8259): setw(c)
-    for c in [0x8149,0x8148,0x8144,0x8143,0x8146,0x8147,0x8151,0x815e,0x8166,0x8165,0x8168,
-              0x8167,0x815d,0x8169,0x816a,0x8163,0x8160,0x8192,0x817b,0x8195,0x8193]: setw(c)
+    for c in KERN_PUNCT: setw(c)
     tbl[0x40]=widths.get(0,4)
     for i in range(512): exe[foff(WTABLE)+i]=tbl[i]
     w32(0x80048b80, jj(CAVE))
     w32(0x8004827c, jj(RAW_CAVE))
     BP.build_english_tree(exe, slpm)   # Dictionary-compressed C/D tree at 0x80117ec4 / 0x801187a4
+    # AFTER the tree build: the object-compositor VWF lives in the SYM table's
+    # tail, which build_english_tree fills with invalid entries first.
+    _install_obj_vwf(exe, w32, widths10)
     # NOTE: names are English, so the name decoder (0x80056e84 -> 0x80057fe4) uses the English
     # tree directly. No private Japanese-tree decoder is installed (that was for Japanese names).
     # Marker-prefixed system strings use one byte per English character.  The wrapper expands
@@ -305,6 +299,99 @@ def build_exe(font_slpm, widths, slpm):
     _install_sys_printer(exe, w32)
     _relocate_bank7_base(exe, w32)
     return exe
+
+# ---- Object-compositor VWF (12px and 10px fullwidth fonts) -----------------------------
+# The object compositor at 0x8004c5ac (Equip captions, party/status name plates;
+# ~200 call sites via the string walker 0x8004c7c0) has its own fixed-width
+# advance: penX(obj+0xa) += the active font's full cell width from the per-font
+# size table 0x800f853c.  Fullwidth English through it lands on a rigid 12px or
+# 10px grid ("H a w k" name plates) and can overrun the 96px name buffers.
+#
+# The character is in no register at the advance site, so the fix is two-staged:
+# a wrapper on the glyph-index lookup call (0x8004c604: jal 0x8004c55c, a0 =
+# char ptr) records the char's VWF width for BOTH kerned fonts in two scratch
+# bytes, and the advance site (0x8004c78c) consumes the one matching the active
+# font's cell width: 12 -> dialogue WTABLE, 10 -> WTABLE10 (kerned 10x10, the
+# party/status name-plate font).  Other cell widths (8x8/8x10) and non-Latin
+# rows keep their stock metrics.
+#
+# Home: the tail of the C/D SYM table.  build_english_tree fills the whole
+# table with entries the decoder can never reach before laying out the (much
+# smaller) English tree, and BP.SYM_TAIL_RESERVE keeps the tree out of the
+# reservation, so [0x80118de8, 0x80119084) is never-written, never-read space.
+OBJ_SCR12, OBJ_SCR10 = 0x800d72d4, 0x800d72d5   # scratch bytes in the font cave
+OBJ_A, OBJ_B, WTABLE10 = 0x80118de8, 0x80118e40, 0x80118e84
+SYM_END = 0x80119084                             # 0x801187a4 + 2272 (table capacity)
+
+def _install_obj_vwf(exe, w32, widths10):
+    OBJ_LOOKUP, OBJ_ADV_RET, WTABLE = 0x8004c55c, 0x8004c794, 0x800d7300
+    ZERO,V0,A0,T6,T7,T8,T9,S2 = 0,2,4,14,15,24,25,18
+    RI=lambda op,rs,rt,imm:((op&0x3f)<<26)|((rs&0x1f)<<21)|((rt&0x1f)<<16)|(imm&0xffff)
+    LBU=lambda rt,o,rs:RI(0x24,rs,rt,o); LHU=lambda rt,o,rs:RI(0x25,rs,rt,o)
+    SB=lambda rt,o,rs:RI(0x28,rs,rt,o);  ADDIU=lambda rt,rs,i:RI(0x09,rs,rt,i)
+    SLTIU=lambda rt,rs,i:RI(0x0b,rs,rt,i); LUI=lambda rt,i:RI(0x0f,0,rt,i)
+    BEQ=lambda rs,rt,off:RI(0x04,rs,rt,off); BNE=lambda rs,rt,off:RI(0x05,rs,rt,off)
+    SLL=lambda rd,rt,sa:((rt&0x1f)<<16)|((rd&0x1f)<<11)|((sa&0x1f)<<6)
+    ADDU=lambda rd,rs,rt:((rs&0x1f)<<21)|((rt&0x1f)<<16)|((rd&0x1f)<<11)|0x21
+    J=lambda t:(0x02<<26)|((t>>2)&0x03ffffff); JAL=lambda t:(0x03<<26)|((t>>2)&0x03ffffff)
+    NOP=0
+    lo=lambda x:x&0xffff; hi=lambda x:((x>>16)+(1 if x&0x8000 else 0))&0xffff
+
+    # Wrapper: zero both scratches; for SJIS rows 0x81/0x82 record both widths.
+    # R3000 load-delay slots are respected (a loaded register is never consumed
+    # by the immediately following instruction).
+    prog_a=[LUI(T9,hi(OBJ_SCR12)),
+            SB(ZERO,lo(OBJ_SCR12),T9), SB(ZERO,lo(OBJ_SCR10),T9),
+            LBU(T6,0,A0), LBU(T7,1,A0),
+            ADDIU(T6,T6,-0x81), SLTIU(T8,T6,2),
+            0,                                   # beq t8,zero -> OUT (patched below)
+            SLL(T6,T6,8),                        # delay slot, harmless when taken
+            ADDU(T6,T6,T7),
+            LUI(T8,hi(WTABLE)), ADDIU(T8,T8,lo(WTABLE)), ADDU(T8,T8,T6), LBU(T8,0,T8),
+            LUI(T7,hi(WTABLE10)), ADDIU(T7,T7,lo(WTABLE10)), ADDU(T7,T7,T6), LBU(T7,0,T7),
+            SB(T8,lo(OBJ_SCR12),T9), SB(T7,lo(OBJ_SCR10),T9),
+            J(OBJ_LOOKUP), NOP]                  # OUT
+    OUT=len(prog_a)-2
+    prog_a[7]=BEQ(T8,ZERO,OUT-(7+1))
+    # Advance: t6 = the font's cell width.  12 -> scr12, 10 -> scr10, else stock.
+    prog_b=[LUI(T9,hi(OBJ_SCR12)), LBU(T8,lo(OBJ_SCR12),T9),
+            ADDIU(V0,T6,-12),
+            0,                                   # beq v0,zero -> USE
+            NOP,
+            ADDIU(V0,T6,-10),
+            0,                                   # bne v0,zero -> STOCK
+            NOP,
+            LBU(T8,lo(OBJ_SCR10),T9), NOP,
+            0,                                   # USE: beq t8,zero -> STOCK
+            NOP,
+            ADDU(T6,T8,ZERO),
+            LHU(V0,0xa,S2),                      # STOCK: reproduced advance read
+            J(OBJ_ADV_RET), NOP]
+    USE, STOCK = 10, 13
+    prog_b[3]=BEQ(V0,ZERO,USE-(3+1))
+    prog_b[6]=BNE(V0,ZERO,STOCK-(6+1))
+    prog_b[10]=BEQ(T8,ZERO,STOCK-(10+1))
+    if (OBJ_A+len(prog_a)*4!=OBJ_B or OBJ_B+len(prog_b)*4>WTABLE10 or
+            WTABLE10+512!=SYM_END or OBJ_A-0x801187a4!=BP.STCAP-BP.SYM_TAIL_RESERVE):
+        raise SystemExit("object-printer VWF reservation layout changed; re-check")
+    for addr, expect in ((0x8004c604,0x0c013157),   # jal 0x8004c55c
+                         (0x8004c78c,0x9642000a),   # lhu $v0, 0xa($s2)
+                         (0x8004c790,0x00000000)):  # delay-slot nop we rely on
+        got=struct.unpack_from("<I",exe,foff(addr))[0]
+        if got!=expect:
+            raise SystemExit(f"object-printer site {addr:#x}: expected {expect:#010x}, got {got:#010x}")
+    for i,wd in enumerate(prog_a): w32(OBJ_A+i*4, wd)
+    for i,wd in enumerate(prog_b): w32(OBJ_B+i*4, wd)
+    tbl=bytearray([10])*512
+    def sidx(code):
+        b1,b2=code>>8,code&0xff; row=(b1-0x81) if b1<0xa0 else (b1-0xc1); return (b2-0x40)+row*189
+    for code in ([*range(0x8260,0x827a), *range(0x8281,0x829b)] + KERN_PUNCT):
+        v=widths10.get(sidx(code))
+        if v is not None: tbl[((code>>8)-0x81)*256+(code&0xff)]=v
+    tbl[0x40]=widths10.get(0,4)
+    for i in range(512): exe[foff(WTABLE10)+i]=tbl[i]
+    w32(0x8004c604, JAL(OBJ_A))
+    w32(0x8004c78c, J(OBJ_B))
 
 def _relocate_bank7_base(exe, w32):
     """Repoint dialogue bank 7 from 0x80116f2c into the rodata cave.
@@ -809,9 +896,9 @@ def main(argv=None):
     cmdinit0 = extract_from_bin(bind, CMDINIT_SECTOR, CMDINIT_SIZE)
     rdlogo0 = extract_from_bin(bind, RDLOGO_SECTOR, RDLOGO_SIZE)
     print("[2/6] kerning font...")
-    font_slpm, widths = kern_font(slpm)
+    font_slpm, widths, widths10 = kern_font(slpm)
     print("[3/6] building exe (VWF hook + dictionary-compressed C/D tree)...")
-    exe = build_exe(font_slpm, widths, slpm)
+    exe = build_exe(font_slpm, widths, widths10, slpm)
     PATHS = BR.build_paths(0x80117ec4, 0x801187a4, exe)
     print("[4/6] applying name tables")
     apply_name_tables(exe, slpm, PATHS)
