@@ -359,7 +359,11 @@ def generate_opening(
     input_bin = Path(input_bin)
     output = Path(output)
     output.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(prefix="smt2-opening-") as temporary:
+    # Stage on the output's drive: the final Path.replace is a rename, and
+    # Windows cannot rename across drives (the default temp dir may be on C:).
+    with tempfile.TemporaryDirectory(
+        prefix="smt2-opening-", dir=output.parent
+    ) as temporary:
         temporary = Path(temporary)
         raw_opening = temporary / "OPENING_raw.str"
         translated_video = temporary / "OPENING_EN.mkv"
