@@ -15,12 +15,18 @@ build tooling. It does not contain, distribute, or download game data.
 ## Requirements
 
 - Python 3.10 or newer
-- [FFmpeg](https://ffmpeg.org/download.html) available on `PATH`
-- [`psxavenc` 0.3.1](https://github.com/WonderfulToolchain/psxavenc/releases/tag/v0.3.1)
-  available on `PATH`, placed at `build/psxavenc/bin/psxavenc.exe`, or supplied
-  with `--psxavenc PATH`
 - A legally obtained, verified **Shin Megami Tensei II (Japan) (Rev 1)**
   MODE2/2352 BIN image (222,694,416 bytes)
+
+Translating the opening movie uses [FFmpeg](https://ffmpeg.org/download.html)
+from `PATH` (or `--ffmpeg PATH`). The build automatically downloads the pinned
+[`psxavenc` 0.3.1](https://github.com/WonderfulToolchain/psxavenc/releases/tag/v0.3.1)
+release for Windows or Linux when it is not already on `PATH`. It is cached at
+`build/psxavenc/bin/psxavenc.exe` (or `psxavenc` on Linux).
+`--psxavenc PATH` can still be used to select an existing copy. These movie
+tools are optional: if either tool is unavailable, the download fails, or the
+movie cannot be generated for any other reason, the build displays a warning
+and keeps the original Japanese opening movie.
 
 [`pyxdelta`](https://pypi.org/project/pyxdelta/) is optional and is needed only
 when building an xdelta patch:
@@ -66,7 +72,8 @@ python -m pip install pyxdelta
    The opening build decodes the movie from the supplied disc, replaces the
    baked-in Japanese crawl using the game's own font, and re-encodes it at the
    original 320x240, 15 fps, 10-sectors-per-frame layout. Pass `--skip-opening`
-   only for development builds that should retain the Japanese movie.
+   for development builds that should retain the Japanese movie without
+   checking for or downloading `psxavenc`.
 
 4. To additionally create `SMT2_EN.xdelta` from the supplied source BIN, install
    `pyxdelta` as shown above and pass `--xdelta`:

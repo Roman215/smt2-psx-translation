@@ -10,10 +10,14 @@ written back in place without moving any ISO files.
 
 from __future__ import annotations
 
+import hashlib
 import shutil
 import struct
 import subprocess
+import sys
 import tempfile
+import urllib.request
+import zipfile
 from pathlib import Path
 
 import build_en_tree as ET
@@ -28,6 +32,24 @@ FRAME_COUNT = 1100
 WIDTH = 320
 HEIGHT = 240
 FPS = 15
+
+PSXAVENC_VERSION = "0.3.1"
+PSXAVENC_RELEASE_URL = (
+    "https://github.com/WonderfulToolchain/psxavenc/releases/download/"
+    f"v{PSXAVENC_VERSION}"
+)
+PSXAVENC_DOWNLOADS = {
+    "win32": (
+        "psxavenc-windows.zip",
+        "bin/psxavenc.exe",
+        "b44a4cf5a8c293a27182cddcca513428b26f0e143189ad53e29e6729b3d9a7a5",
+    ),
+    "linux": (
+        "psxavenc-linux.zip",
+        "bin/psxavenc",
+        "ad22b887683631149fb8c7c85ecea8bb760dd482f9e18cce2b35b11319e95e51",
+    ),
+}
 
 FONT_ADDRESS = 0x800D4188
 FONT_WIDTH = 12
@@ -341,6 +363,7 @@ def generate_opening(
         temporary = Path(temporary)
         raw_opening = temporary / "OPENING_raw.str"
         translated_video = temporary / "OPENING_EN.mkv"
+        encoded_opening = temporary / "OPENING_EN.str"
         _extract_raw_opening(input_bin, raw_opening)
         _render_video(raw_opening, translated_video, ffmpeg, executable, widths)
         subprocess.run(
@@ -358,16 +381,71 @@ def generate_opening(
                 "-x",
                 "2",
                 str(translated_video),
-                str(output),
+                str(encoded_opening),
             ],
             check=True,
         )
-    _validate_strv(output)
+        _validate_strv(encoded_opening)
+        encoded_opening.replace(output)
     return output
 
 
-def find_tool(requested: str | None, name: str, local: Path | None = None) -> str:
-    """Resolve a required external executable with a useful build error."""
+def download_psxavenc(install_directory: str | Path) -> Path:
+    """Download and atomically install the pinned psxavenc release."""
+
+    try:
+        archive_name, archive_member, expected_hash = PSXAVENC_DOWNLOADS[sys.platform]
+    except KeyError as exc:
+        raise RuntimeError(f"no psxavenc download is available for {sys.platform}") from exc
+
+    install_directory = Path(install_directory)
+    install_directory.parent.mkdir(parents=True, exist_ok=True)
+    url = f"{PSXAVENC_RELEASE_URL}/{archive_name}"
+    request = urllib.request.Request(url, headers={"User-Agent": "SMT2-English-build"})
+
+    with tempfile.TemporaryDirectory(
+        prefix="psxavenc-download-", dir=install_directory.parent
+    ) as temporary:
+        temporary = Path(temporary)
+        archive_path = temporary / archive_name
+        with urllib.request.urlopen(request, timeout=30) as response:
+            with archive_path.open("wb") as archive_file:
+                shutil.copyfileobj(response, archive_file)
+
+        digest = hashlib.sha256()
+        with archive_path.open("rb") as archive_file:
+            for chunk in iter(lambda: archive_file.read(1024 * 1024), b""):
+                digest.update(chunk)
+        actual_hash = digest.hexdigest()
+        if actual_hash != expected_hash:
+            raise RuntimeError(
+                f"downloaded {archive_name} has SHA-256 {actual_hash}; "
+                f"expected {expected_hash}"
+            )
+
+        temporary_executable = temporary / Path(archive_member).name
+        with zipfile.ZipFile(archive_path) as archive:
+            with archive.open(archive_member) as source:
+                with temporary_executable.open("wb") as destination:
+                    shutil.copyfileobj(source, destination)
+        if sys.platform != "win32":
+            temporary_executable.chmod(0o755)
+
+        installed_executable = install_directory / archive_member
+        installed_executable.parent.mkdir(parents=True, exist_ok=True)
+        temporary_executable.replace(installed_executable)
+
+    return installed_executable
+
+
+def find_tool(
+    requested: str | None,
+    name: str,
+    local: Path | None = None,
+    *,
+    required: bool = True,
+) -> str | None:
+    """Resolve an external executable, optionally returning None if unavailable."""
 
     candidates = []
     if requested:
@@ -380,5 +458,7 @@ def find_tool(requested: str | None, name: str, local: Path | None = None) -> st
     found = shutil.which(name)
     if found:
         return found
+    if not required:
+        return None
     hint = f" (or pass its path explicitly)" if requested is None else ""
     raise SystemExit(f"Required opening-movie tool not found: {name}{hint}")
