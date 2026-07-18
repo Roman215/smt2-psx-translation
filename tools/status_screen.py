@@ -179,27 +179,35 @@ def patch_status_texture(packa, exe):
         (128, 13, 24, "EVA"),
         (56, 26, 24, "ATK"),
         (80, 26, 48, "HITS"),
-        (128, 26, 24, "ALN"),
+        # 相性: armor damage affinity/resistance (Normal, Fire/Ice, etc.),
+        # not the item's Law/Neutral/Chaos equip restriction.
+        (128, 26, 24, "AFF"),
         (56, 39, 24, "HIT"),
         (80, 39, 48, "EFFECT"),
         (32, 52, 24, "DEF"),
         (80, 52, 24, "ALN"),
         (128, 52, 24, "ALN"),
         (32, 65, 24, "EVA"),
-        (80, 65, 24, "ATK"),
-        (128, 65, 24, "ATK"),
         (32, 78, 48, "M.PWR"),
-        (128, 78, 24, "HIT"),
         (32, 91, 48, "M.EFF"),
-        (128, 91, 48, "HITS"),
-        (80, 104, 48, "EFFECT"),
     ):
         _draw_game_font(equip, exe, x, y, width, text)
 
-    # This last row is only eleven pixels tall; row 128 begins an unrelated,
-    # full-width colored sprite.  Draw upward within the real caption cell.
-    _draw_game_font(equip, exe, 80, 117, 24, "ALN", height=11, y_offset=0)
-    _draw_game_font(equip, exe, 128, 117, 24, "ALN", height=11, y_offset=0)
+    # Gun/special-weapon captions use a second packed block whose real row
+    # starts are 65, 77, 90, 103, and 116. Treating them as a regular 13px
+    # grid (65, 78, 91, 104, 117) shifts each successive English label down
+    # and leaves Japanese edge pixels behind.
+    for x, y, width, height, text in (
+        (80, 65, 24, 12, "ATK"),
+        (128, 65, 24, 12, "ATK"),
+        (128, 77, 24, 13, "HIT"),
+        (128, 90, 48, 13, "HITS"),
+        (80, 103, 48, 13, "EFFECT"),
+        # Row 128 begins an unrelated full-width colored sprite.
+        (80, 116, 24, 12, "ALN"),
+        (128, 116, 24, 12, "ALN"),
+    ):
+        _draw_game_font(equip, exe, x, y, width, text, height=height, y_offset=1)
 
     for row, text in enumerate(("ST", "IN", "MA", "VI", "AG", "LU")):
         _draw_compact_stat(equip, 212, row * 13, text)
