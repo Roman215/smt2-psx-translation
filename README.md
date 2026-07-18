@@ -4,6 +4,14 @@ Work-in-progress fan translation tools for the PlayStation release of *Shin
 Megami Tensei II*. This repository contains only the translation source and
 build tooling. It does not contain, distribute, or download game data.
 
+## Screenshots
+
+<p align="center">
+  <a href="Screenshots/Intro.png"><img src="Screenshots/Intro.png" width="32%" alt="Translated opening crawl"></a>
+  <a href="Screenshots/1.png"><img src="Screenshots/1.png" width="32%" alt="Translated in-game dialogue"></a>
+  <a href="Screenshots/2.png"><img src="Screenshots/2.png" width="32%" alt="Translated equipment menu"></a>
+</p>
+
 ## Requirements
 
 - Python 3.10 or newer
