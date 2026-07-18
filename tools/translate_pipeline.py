@@ -5,8 +5,14 @@ packing, and allocation checks.
 
 Translated messages are authored as lists mixing text strings and control names:
   TRANS[msgid] = ["Okamoto: Hi", 'CR', "Hawk!", 'WT','PG', ...JP-insert names..., 'ED']
-Control names: CR WT PG ED SY SN Fe TI IT FI FO NI AG SU MN KO OT ZK ZO MG MH PP AL SE
+Control names: CR WT PG ED SY SN Fe TI IT FI FO NI AG SU S2 MN KO OT ZK ZO MG MH PP AL SE
 Insert codes (SY/SN/Fe/...) must be kept where they were in the original.
+
+The stock C/D tree contains two controls whose decoded symbol is ``SU``.  The
+usual one reads the primary numeric slot; the second reads the enemy-group
+slot used for group 2 and the "finished off" message.  ``S2`` is an internal
+alias for that second dispatcher so rebuilding the English tree does not merge
+the two controls.
 
 AG and the A/B control A6F insert only the dynamic party-leader name in the
 English executable. Their shared stock handler also appended Japanese ``たち``;
@@ -18,7 +24,7 @@ sys.path.insert(0, "tools")
 import build_en_tree as ET, block_rebuild as BR, build_prod_exe as BP
 
 CTRL_NAME={n:(struct.unpack(">H",n.encode("ascii"))[0],True) for n in
-  "CR WT PG ED SY SN Fe TI IT FI FO NI AG SU MN KO OT ZK ZO MG MH PP AL SE TW".split()}
+  "CR WT PG ED SY SN Fe TI IT FI FO NI AG SU S2 MN KO OT ZK ZO MG MH PP AL SE TW".split()}
 
 # Banks 4/5 use the older A/B tree. Its dynamic inserts and layout operations
 # all decode to the same nominal 0x8140 symbol, but the control-dispatch index

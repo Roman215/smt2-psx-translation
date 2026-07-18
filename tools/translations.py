@@ -6838,9 +6838,9 @@ TRANS = {
     # contractions ("You cannot ...", "Not enough ..."); only demons and NPCs
     # speaking aloud use contractions.
     0x6000:['ZK',' ','MG'," x",'SU'," appeared!", 'WT','ED'],
-    0x6001:['ZK',' ','MG'," x",'SU'," and", 'CR', 'ZO',' ','MN'," x",'SU'," appeared!", 'WT','ED'],
+    0x6001:['ZK',' ','MG'," x",'SU'," and", 'CR', 'ZO',' ','MN'," x",'S2'," appeared!", 'WT','ED'],
     0x6002:['MG'," x",'SU','ED'],
-    0x6003:['MN'," x",'SU','ED'],
+    0x6003:['MN'," x",'S2','ED'],
     0x6004:["What will you do?", 'ED'],
     0x6005:['AL',", what will you do?", 'ED'],
     0x6006:["Which attack?", 'ED'],
@@ -6868,7 +6868,7 @@ TRANS = {
     0x601c:["No effect at all.", 'TW','ED'],
     0x601d:["No effect on ",'AL',".", 'TW','ED'],
     0x601e:['AL'," collapsed.", 'TW','ED'],
-    0x601f:["Finished off ",'MG'," x",'SU',".", 'TW','ED'],
+    0x601f:["Finished off ",'MG'," x",'S2',".", 'TW','ED'],
     0x6020:["Defeated ",'ZK',' ','MG',".", 'TW','ED'],
     0x6021:["Defeated the demon.", 'TW','ED'],
     0x6022:['AL'," gained ",'SU'," EXP.", 'WT','ED'],
