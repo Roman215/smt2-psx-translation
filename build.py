@@ -89,11 +89,20 @@ def dictionary_corpus_texts():
     return parts
 
 def ab_corpus_texts():
-    """Authored A/B (bank 4/5) text fragments, mirroring dictionary_corpus_texts."""
-    texts=[]
+    """Text from each physically distinct authored A/B stream.
+
+    A/B blocks intern byte-identical messages, so counting aliases and other
+    exact duplicates repeatedly would optimize the dictionary for bytes that
+    are never stored repeatedly.
+    """
+    texts=[]; seen=set()
     for message_id,author in TR.TRANS.items():
         if message_id>>12 not in {4,5}:
             continue
+        key=tuple(author)
+        if key in seen:
+            continue
+        seen.add(key)
         for part in author:
             if not isinstance(part, str):
                 continue
@@ -765,6 +774,71 @@ AB4_EXTRA_SECTORS = 1
 FILE_TABLE = 0x800e891c            # u16 PACKA sector per file id
 FILE_TABLE_ENTRIES = 0x862         # ids 0x000-0x860 + end boundary at 0x861
 
+def _ab_source_specs(slpm):
+    """Return validated stock file bounds and A/B decode specifications."""
+    file_bounds=struct.unpack_from("<3H",slpm,0xda17e)
+    expected_bounds=(0x65e2,0x65f1,0x65f2)
+    if file_bounds!=expected_bounds:
+        raise SystemExit(
+            f"unexpected A/B bank file boundaries: {file_bounds!r}"
+        )
+    b4_start,b5_start,b5_end=file_bounds
+    return file_bounds,{
+        4:(b4_start*2048,(b5_start-b4_start)*2048,2432),
+        5:(b5_start*2048,(b5_end-b5_start)*2048,98),
+    }
+
+def _decode_ab_sources(packa,slpm):
+    """Decode pristine stock Bank 4/5 streams at their original offsets."""
+    file_bounds,specs=_ab_source_specs(slpm)
+    source=bytes(packa); decoded={}
+    for bank,(base,allocation,expected_count) in specs.items():
+        messages,count=decode_ab_block(source[base:base+allocation],slpm)
+        if count!=expected_count:
+            raise SystemExit(
+                f"bank{bank}: expected {expected_count} entries, found {count}"
+            )
+        decoded[bank]=messages
+    return file_bounds,specs,decoded
+
+def _author_ab_messages(decoded):
+    """Tokenize Bank 4/5 using the currently configured A/B dictionaries."""
+    authored={}
+    for bank in (4,5):
+        authored[bank]=[]
+        for index,original in enumerate(decoded[bank]):
+            message_id=(bank<<12)|index
+            if message_id in TR.TRANS:
+                message=TP.ab_author_to_tokens(TR.TRANS[message_id])
+            elif bank==4:
+                # Japanese fallback is intentionally disabled while bank 4 is
+                # being localized. Retain dispatcher operations in source order.
+                controls=[token for token in original if len(token)==3]
+                message=TP.ab_author_to_tokens(["UNTRANSLATED"])+controls
+            else:
+                message=original
+            authored[bank].append(message)
+    return authored
+
+def ab_base_leaf_count(packa,slpm):
+    """Count actual A/B leaves with only the shared dictionary configured.
+
+    Adding local dictionary entries can make some base leaves disappear, so
+    this is a conservative exact-corpus bound rather than a guessed repertoire.
+    """
+    _bounds,_specs,decoded=_decode_ab_sources(packa,slpm)
+    authored=_author_ab_messages(decoded)
+    return len({token for bank in (4,5) for msg in authored[bank] for token in msg})
+
+def _unique_stored_ab_streams(authored):
+    """One copy of every stream physically stored in each separate block."""
+    streams=[]
+    for bank in (4,5):
+        # Interning is per block, so retain one copy in each bank when the same
+        # token stream happens to occur in both.
+        streams.extend(dict.fromkeys(tuple(message) for message in authored[bank]))
+    return streams
+
 def _shift_file_table(exe, first_sector, extra_sectors):
     """Move every file located at/after first_sector by extra_sectors."""
     previous=0
@@ -807,42 +881,14 @@ def apply_ab_banks(exe, packa, slpm):
     decode from the pristine PACKA at stock offsets; destinations use the
     shifted layout, and the exe's file table is rewritten to match.
     """
-    file_bounds=struct.unpack_from("<3H",slpm,0xda17e)
-    expected_bounds=(0x65e2,0x65f1,0x65f2)
-    if file_bounds!=expected_bounds:
-        raise SystemExit(
-            f"unexpected A/B bank file boundaries: {file_bounds!r}"
-        )
+    file_bounds,_src_specs,decoded=_decode_ab_sources(packa,slpm)
     b4_start,b5_start,b5_end=file_bounds
-    src_specs={
-        4:(b4_start*2048,(b5_start-b4_start)*2048,2432),
-        5:(b5_start*2048,(b5_end-b5_start)*2048,98),
-    }
-    source=bytes(packa); decoded={}
-    for bank,(base,allocation,expected_count) in src_specs.items():
-        messages,count=decode_ab_block(source[base:base+allocation],slpm)
-        if count!=expected_count:
-            raise SystemExit(f"bank{bank}: expected {expected_count} entries, found {count}")
-        decoded[bank]=messages
+    authored=_author_ab_messages(decoded)
 
-    authored={}
-    for bank in (4,5):
-        authored[bank]=[]
-        for index,original in enumerate(decoded[bank]):
-            message_id=(bank<<12)|index
-            if message_id in TR.TRANS:
-                message=TP.ab_author_to_tokens(TR.TRANS[message_id])
-            elif bank==4:
-                # Japanese fallback is intentionally disabled while bank 4 is
-                # being localized. Retain every dispatcher operation in source
-                # order so unfinished paths remain structurally testable.
-                controls=[token for token in original if len(token)==3]
-                message=TP.ab_author_to_tokens(["UNTRANSLATED"])+controls
-            else:
-                message=original
-            authored[bank].append(message)
-
-    paths=BP.build_ab_tree(exe,authored[4]+authored[5])
+    # build_ab_block interns exact duplicates independently within each bank.
+    # Weight the Huffman tree by those physically stored streams, not by every
+    # table entry that happens to point to them.
+    paths=BP.build_ab_tree(exe,_unique_stored_ab_streams(authored))
     BP.install_ab_runtime(exe)
     rebuilt={
         bank:build_ab_block(authored[bank],len(authored[bank]),paths)
@@ -1202,7 +1248,9 @@ def main(argv=None):
     # trimmed to the dead space that actually exists in this build and the
     # A/B tokenizer configured before apply_banks authors bank 4/5.
     ab_shared = select_ab_dictionary(dictionary)
-    ab_local = BP.fit_ab_local_dictionary(ab_candidates, len(ab_shared))
+    TP.configure_ab_dictionary(ab_shared)
+    ab_base_leaves = ab_base_leaf_count(packa0, slpm)
+    ab_local = BP.fit_ab_local_dictionary(ab_candidates, ab_base_leaves)
     BP.configure_ab_local_dictionary(ab_local)
     TP.configure_ab_dictionary(
         ab_shared, ab_local, BP.DICT_CODE_BASE + len(dictionary)
@@ -1210,7 +1258,8 @@ def main(argv=None):
     ab_string_bytes = sum(2 * len(text) + 1 for text, _weight in ab_local)
     print(
         f"  A/B dictionary: {len(ab_local)} entries fit "
-        f"({ab_string_bytes} string bytes in dead exe space)"
+        f"({ab_string_bytes} string bytes in dead exe space, "
+        f"{ab_base_leaves} measured base leaves)"
     )
     print("[5/7] applying name tables")
     apply_name_tables(exe, slpm, PATHS)
