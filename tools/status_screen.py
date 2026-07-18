@@ -196,10 +196,13 @@ def patch_status_texture(packa, exe):
     # Gun/special-weapon captions use a second packed block whose real row
     # starts are 65, 77, 90, 103, and 116. Treating them as a regular 13px
     # grid (65, 78, 91, 104, 117) shifts each successive English label down
-    # and leaves Japanese edge pixels behind.
+    # and leaves Japanese edge pixels behind. Keep those true cell boundaries.
+    # The Gun and Ammo first-row ATK cells sit one pixel lower when sampled, so
+    # compensate inside those two cells; rows 2-5 use the Sword-page baseline.
+    _draw_game_font(equip, exe, 80, 65, 24, "ATK", height=12, y_offset=1)
+    _draw_game_font(equip, exe, 128, 65, 24, "ATK", height=12, y_offset=1)
+
     for x, y, width, height, text in (
-        (80, 65, 24, 12, "ATK"),
-        (128, 65, 24, 12, "ATK"),
         (128, 77, 24, 13, "HIT"),
         (128, 90, 48, 13, "HITS"),
         (80, 103, 48, 13, "EFFECT"),
@@ -207,7 +210,7 @@ def patch_status_texture(packa, exe):
         (80, 116, 24, 12, "ALN"),
         (128, 116, 24, 12, "ALN"),
     ):
-        _draw_game_font(equip, exe, x, y, width, text, height=height, y_offset=1)
+        _draw_game_font(equip, exe, x, y, width, text, height=height, y_offset=2)
 
     for row, text in enumerate(("ST", "IN", "MA", "VI", "AG", "LU")):
         _draw_compact_stat(equip, 212, row * 13, text)
