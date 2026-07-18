@@ -87,7 +87,10 @@ python -m pip install pyxdelta
    baked-in Japanese crawl using the game's own font, and re-encodes it at the
    original 320x240, 15 fps, 10-sectors-per-frame layout. Pass `--skip-opening`
    for development builds that should retain the Japanese movie without
-   checking for or downloading `psxavenc`.
+   checking for or downloading `psxavenc`. Pass `--require-opening` to abort
+   the build if the movie cannot be generated instead of warning and keeping
+   the Japanese movie — release builds use this so the English-movie patch can
+   never silently ship the wrong movie.
 
 4. To additionally create `SMT2_EN.xdelta` from the supplied source BIN, install
    `pyxdelta` as shown above and pass `--xdelta`:
