@@ -11,6 +11,11 @@ import build_en_tree as ET
 
 STRUCT=0x80117ec4; SYM=0x801187a4; STCAP=SYM-STRUCT
 AB_STRUCT=0x8010130c; AB_SYM=0x80101978; AB_STCAP=AB_SYM-AB_STRUCT
+# The SYM table's tail hosts the object-compositor VWF hook and its 10px width
+# table (build.py _install_obj_vwf).  build_english_tree pre-fills the whole
+# table with unreachable entries, so keeping the tree below this line leaves
+# the reservation never-read and never-written.
+SYM_TAIL_RESERVE=0x29c
 
 # ---- Dictionary runtime layout ----------------------------------------------------
 # Lives in the tail of the rodata font-placeholder cave, AFTER bank 7's relocated
@@ -148,7 +153,8 @@ def build_english_tree(exe, slpm):
         off[i]=nxt; nxt+=32
         for c in tree[i][1]:
             if tree[c][0]=='node': q.append(c)
-    assert nxt<=STCAP, f"tree overflow {nxt}>{STCAP}"
+    assert nxt<=STCAP-SYM_TAIL_RESERVE, \
+        f"tree overflow into VWF reservation: {nxt}>{STCAP-SYM_TAIL_RESERVE}"
     def entry(sym):
         if isinstance(sym,tuple):
             if sym[0]=='C':  # control

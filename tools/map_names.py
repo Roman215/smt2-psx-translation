@@ -12,9 +12,10 @@ renders on two lines).
 English names run longer than the katakana, so we RELOCATE the translated strings into
 the free rodata font-placeholder cave and REPOINT both tables. No code changes.
 
-Cave: 0x800d7500 .. 0x800d8290.  The final 0x70 bytes before 0x800d8300 hold the
-two-byte string VWF wrapper, followed by the marker-based system-string printer and
-its ASCII/SJIS table at 0x800d8300 .. 0x800d8500.
+Cave: 0x800d7500 .. 0x800d8290.  The 0x70 bytes at 0x800d8290 .. 0x800d8300 are
+spare (they held the object-compositor VWF hook until it moved to the SYM-table
+tail; see build.py _install_obj_vwf), then the marker-based system-string printer
+and its ASCII/SJIS table at 0x800d8300 .. 0x800d8500.
 
 Translation notes: dropped the redundant "旧" (former) prefix (all of Tokyo is ruined),
 '@' = line break so long names split Name/Floor for the ~2-line display, Kabbalah Sefirot
