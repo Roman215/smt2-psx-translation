@@ -1196,6 +1196,63 @@ def find_input_bin(requested=None):
         )
     return path
 
+
+def build_opening_movie(
+    input_bin,
+    executable,
+    widths,
+    output_dir,
+    *,
+    requested_ffmpeg=None,
+    requested_psxavenc=None,
+    skip=False,
+):
+    """Best-effort opening translation; return None to keep the source movie."""
+
+    if skip:
+        print("[3/7] leaving OPENING.STR unchanged (--skip-opening)")
+        return None
+
+    print("[3/7] rebuilding English OPENING.STR...")
+    try:
+        local_psxavenc = Path("build/psxavenc/bin") / (
+            "psxavenc.exe" if sys.platform == "win32" else "psxavenc"
+        )
+        psxavenc = OM.find_tool(
+            requested_psxavenc, "psxavenc", local_psxavenc, required=False
+        )
+        if psxavenc is None:
+            print(
+                f"  psxavenc not found; downloading v{OM.PSXAVENC_VERSION} "
+                "from GitHub..."
+            )
+            downloaded_psxavenc = OM.download_psxavenc(Path("build/psxavenc"))
+            psxavenc = str(downloaded_psxavenc.resolve())
+            print(f"  installed psxavenc at {downloaded_psxavenc}")
+
+        ffmpeg = OM.find_tool(requested_ffmpeg, "ffmpeg", required=False)
+        if ffmpeg is None:
+            raise RuntimeError("FFmpeg was not found on PATH or at --ffmpeg")
+        opening_path = OM.generate_opening(
+            input_bin,
+            executable,
+            widths,
+            Path(output_dir) / "OPENING_EN.str",
+            ffmpeg=ffmpeg,
+            psxavenc=psxavenc,
+        )
+        opening = opening_path.read_bytes()
+        print(
+            f"  opening: {len(opening) // OM.USER_DATA_SIZE} sectors, "
+            f"{OM.FRAME_COUNT} frames"
+        )
+        return opening
+    except Exception as exc:
+        print(f"  WARNING: the opening movie was not translated: {exc}")
+        print("  WARNING: continuing with the original Japanese movie.")
+        return None
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(
         description="Build the SMT2 PSX English translation."
@@ -1204,10 +1261,14 @@ def main(argv=None):
         "--input", metavar="BIN", help="source Japan Rev 1 MODE2/2352 BIN (default: auto-detect)"
     )
     parser.add_argument(
-        "--ffmpeg", metavar="EXE", help="FFmpeg executable used to decode the opening movie"
+        "--ffmpeg",
+        metavar="EXE",
+        help="optional FFmpeg executable used to decode the opening movie",
     )
     parser.add_argument(
-        "--psxavenc", metavar="EXE", help="psxavenc executable used to rebuild the opening movie"
+        "--psxavenc",
+        metavar="EXE",
+        help="optional psxavenc executable used to rebuild the opening movie",
     )
     parser.add_argument(
         "--skip-opening", action="store_true", help="leave the Japanese opening movie unchanged"
@@ -1265,26 +1326,15 @@ def main(argv=None):
     rdlogo0 = extract_from_bin(bind, RDLOGO_SECTOR, RDLOGO_SIZE)
     print("[2/7] kerning font...")
     font_slpm, widths, widths10 = kern_font(slpm)
-    opening = None
-    if args.skip_opening:
-        print("[3/7] leaving OPENING.STR unchanged (--skip-opening)")
-    else:
-        print("[3/7] rebuilding English OPENING.STR...")
-        ffmpeg = OM.find_tool(args.ffmpeg, "ffmpeg")
-        local_psxavenc = Path("build/psxavenc/bin/psxavenc.exe")
-        if not local_psxavenc.is_file():
-            local_psxavenc = Path("build/psxavenc/bin/psxavenc")
-        psxavenc = OM.find_tool(args.psxavenc, "psxavenc", local_psxavenc)
-        opening_path = OM.generate_opening(
-            input_bin,
-            font_slpm,
-            widths,
-            output_dir / "OPENING_EN.str",
-            ffmpeg=ffmpeg,
-            psxavenc=psxavenc,
-        )
-        opening = opening_path.read_bytes()
-        print(f"  opening: {len(opening) // OM.USER_DATA_SIZE} sectors, {OM.FRAME_COUNT} frames")
+    opening = build_opening_movie(
+        input_bin,
+        font_slpm,
+        widths,
+        output_dir,
+        requested_ffmpeg=args.ffmpeg,
+        requested_psxavenc=args.psxavenc,
+        skip=args.skip_opening,
+    )
     print("[4/7] building exe (VWF hook + dictionary-compressed C/D tree)...")
     exe = build_exe(font_slpm, widths, widths10, slpm)
     PATHS = BR.build_paths(0x80117ec4, 0x801187a4, exe)
