@@ -1,8 +1,8 @@
 """Production exe: kerned font plus rebuilt C/D and A/B text trees.
 
 The C/D tree uses the mined English dictionary. The A/B tree is rebuilt from
-the untouched Japanese negotiation corpus plus authored English battle-command
-fragments, allowing bank 5 to be translated without breaking bank 4.
+authored English negotiation and battle-command fragments. Unfinished bank-4
+entries are represented by English markers rather than Japanese fallbacks.
 Each mined dictionary entry is a control-flagged Huffman leaf (struct=0xC000|6,
 symbol=0x8540+i). The slot-6 stub calls an expansion handler, which looks up the
 full string and tail-jumps the stock append routine used by name inserts."""
@@ -174,12 +174,14 @@ def build_english_tree(exe, slpm):
     _install_dictionary_runtime(exe)
     return codes, cidx
 
-def build_bilingual_ab_tree(exe, messages):
-    """Build the A/B tree from exact bank-4/5 tokens and return token paths.
+def build_ab_tree(exe, messages):
+    """Build the English A/B tree from exact bank-4/5 tokens and return paths.
 
     Plain tokens are ``(symbol, False)``. A/B controls are
     ``(0x8140, True, dispatch_index)`` because the stock tree assigns several
-    different runtime operations the same nominal space symbol.
+    different runtime operations the same nominal space symbol. Authored
+    English may also use shared-dictionary leaves shaped as
+    ``(dictionary_symbol, True, DICT_JT_INDEX)``.
     """
     import heapq
     from collections import Counter, deque
@@ -192,7 +194,7 @@ def build_bilingual_ab_tree(exe, messages):
     # Reserve nibble 0 at the root as an invalid padding branch. A/B streams are
     # individually byte-aligned, so allowing a zero pad nibble to reach a real
     # leaf would append a spurious final glyph. Deeper nodes retain all sixteen
-    # branches so the bilingual repertoire still fits the stock table.
+    # branches so the complete English repertoire still fits the stock table.
     items=list(counts.items()); pad=(-(len(items)-1))%15
     heap=[]; tree={}; nid=0
     for token,frequency in items:

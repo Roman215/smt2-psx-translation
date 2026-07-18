@@ -1,7 +1,7 @@
 """SMT2 translation token helpers. C/D dialogue uses named two-byte controls and
-the mined English dictionary; A/B battle fragments use named dispatcher indices
-and plain character tokens. build.py owns block decoding, packing, and allocation
-checks.
+the mined English dictionary; A/B negotiation and battle fragments use named
+dispatcher indices plus a subset of that dictionary. build.py owns block decoding,
+packing, and allocation checks.
 
 Translated messages are authored as lists mixing text strings and control names:
   TRANS[msgid] = ["Okamoto: Hi", 'CR', "Hawk!", 'WT','PG', ...JP-insert names..., 'ED']
