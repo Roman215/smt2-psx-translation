@@ -7,9 +7,9 @@ build tooling. It does not contain, distribute, or download game data.
 ## Screenshots
 
 <p align="center">
-  <a href="Screenshots/Intro.png"><img src="Screenshots/Intro.png" width="32%" alt="Translated opening crawl"></a>
-  <a href="Screenshots/1.png"><img src="Screenshots/1.png" width="32%" alt="Translated in-game dialogue"></a>
-  <a href="Screenshots/2.png"><img src="Screenshots/2.png" width="32%" alt="Translated equipment menu"></a>
+  <a href="screenshots/Intro.png"><img src="screenshots/Intro.png" width="32%" alt="Translated opening crawl"></a>
+  <a href="screenshots/1.png"><img src="screenshots/1.png" width="32%" alt="Translated in-game dialogue"></a>
+  <a href="screenshots/2.png"><img src="screenshots/2.png" width="32%" alt="Translated equipment menu"></a>
 </p>
 
 ## Requirements
