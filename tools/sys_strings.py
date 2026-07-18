@@ -1,4 +1,4 @@
-"""SMT2 raw-SJIS system strings (memcard/save/load, COMP menu, errors, menu help).
+"""SMT2 raw-SJIS system strings.
 
 English strings begin with marker 0x1f and store one ASCII byte per character.  The
 printer wrapper in build.py maps each byte back to the game's existing fullwidth SJIS
@@ -8,11 +8,17 @@ Every translation remains in its original executable slot.  This keeps the boot-
 memory layout untouched; apply_sys validates every encoded string against the Japanese
 slot size before writing it.
 
-NOT translated (left as-is on purpose): printf format strings (%d/%s), debug text,
-bu00:BISLPM* memcard save-file identifiers, sound/VAB/SEQ dumps, single-char name-insert
-markers, already-English labels, the file-select title format strings, and the compact
-race-label table (2-3 kanji, no room for English -- the shown race names come from the
-translated RACES name table instead).
+This covers the executable-resident save/load UI, COMP and party prompts, menu help,
+healing and shop interfaces, and other short messages that do not live in the dialogue
+banks.  The original executable contains a second, file-number-specific load-confirmation
+table near the map names; those strings are live and must be translated independently of
+the generic memory-card messages.
+
+NOT translated (left as-is on purpose): debug text, bu00:BISLPM* memcard save-file
+identifiers, sound/VAB/SEQ dumps, single-character name-insert markers, already-English
+labels, the file-select title format tails, the superseded map-name pool (its pointer tables
+are repointed by map_names.py), and the compact race-label table (the displayed race names
+come from the translated RACES table instead).
 """
 
 import struct
@@ -343,7 +349,9 @@ ASCII_FIT_ENGLISH = {
     0x0e90: "Not enough free blocks.",
     0x0eac: "This save may prevent suspending.",
     0x0f60: "Loading erases suspend data.",
+    0x0f84: "Load this file.",
     0x0fbc: "Suspend data exists.",
+    0x0ff0: "Proceed?",
     0x1094: "For save and suspend data,",
     0x10b4: "there are too few free blocks.",
     0x1878: "Cannot summon this demon.",
@@ -374,6 +382,300 @@ for _off, _english in ASCII_FIT_ENGLISH.items():
     SYS[_off] = (_gap, _english)
 
 
+# Additional player-facing strings found by auditing every executable-resident SJIS
+# string and its pointer tables.  These are ordinary, NUL-terminated, four-byte-aligned
+# slots, so apply_sys derives their safe allocation from the untouched Japanese source.
+# Keeping this separate from SYS makes the original hand-measured table above stable.
+AUDITED_SYSTEM_TEXT = {
+    # Missed short error and the remainder of the System/Config help tables.
+    0x17bc: " leaves.",
+    0x1964: "Short on cash",
+    0x1b8c: " discarded",
+    0x231c: "Spirits",
+    0x2c40: "Analyze defeated demons.",
+    0x2c60: "Auto-Recover the entire party.",
+    0x2c88: "View maps of places visited.",
+    0x2cb0: "Remove a demon from party.",
+    0x2ccc: "Return a demon to COMP.",
+    0x2ce8: "Summon a demon from COMP.",
+    0x2d08: "Discard an item.",
+    0x2d20: "Reorder your items.",
+    0x2d38: "Sort your items.",
+    0x2d50: "Use an item.",
+    0x2d68: "Configure Auto-Battle.",
+    0x2d88: "Set battle message speed.",
+    0x2db0: "Configure attack effects.",
+    0x2dd0: "Repeat last action; defend if resources run out.",
+    0x2e10: "Repeat last action; attack if resources run out.",
+    0x2e58: "Use basic attacks, then repeat last action.",
+    0x2e88: "Battle settings.",
+    0x2e9c: "Return a demon to COMP.",
+    0x2eb8: "Use a skill.",
+    0x2ecc: "Basic attack.",
+    0x2ee0: "Defend.",
+    0x2eec: "Attack: Gun",
+    0x2efc: "Attack: Sword",
+    0x2f0c: "Start Auto-Battle.",
+    0x2f28: "Escape from battle.",
+    0x2f40: "Talk to the demon.",
+    0x2f54: "Start battle.",
+    0x2f68: "All Types",
+    0x2f78: "Holy Armor",
+    0x2f88: "Demon Armor",
+    0x2f98: "Drain Elec",
+    0x2fa8: "Drain Fire",
+    0x3068: "Sorry... Your level is too low.",
+    0x3094: "Their alignments differ. Fuse them anyway?",
+    0x30d4: "Your item bag is full.",
+    0x30f0: "That demon is with you.",
+    0x310c: "Sorry. The fusion failed.",
+    0x31d0: "Battle settings.",
+    0x31e4: "Effect settings.",
+    0x3200: "Message speed settings.",
+    0x3224: "Auto-Battle settings.",
+    0x3a90: "Which slot?",
+    0x3df0: "Go outside",
+    0x3f2c: "Lucky Khan",
+    0x3f40: "Mr. DNA",
+    0x3f50: "Timing X",
+
+    # Cathedral/fusion selection and equipment-detail labels.
+    0x5230: "F.Swd",
+    0x5288: "F.Swd",
+    0x5294: "F.Gun",
+    0x529c: "Arms",
+    0x52a4: "Head",
+    0x52ac: "Legs",
+    0x52b4: "Body",
+    0x52bc: "Choose the 1st demon.",
+    0x52d8: "Choose demon 2.",
+    0x52f0: "Choose the 3rd demon.",
+    0x5310: "Choose sword 1.",
+    0x5324: "Fuse with which demon?",
+    0x5344: "Choose a sword.",
+    0x535c: "Choose a demon to fuse.",
+    0x537c: "Choose sword 2.",
+    0x53e4: "Will this do?",
+    0x53fc: "Let us begin.",
+
+    # Healing interfaces. Leading spaces complete a dynamically printed name.
+    0x5410: "Cost",
+    0x546c: " was uncursed!",
+    0x5480: " was revived!",
+    0x5490: " recovered HP and MP!",
+    0x54ac: " was cured!",
+    0x54c0: " fully healed!",
+    0x54d0: "Uncurse whom?",
+    0x54ec: "Revive whom?",
+    0x5504: "Treat whom?",
+    0x551c: "Restore whom?",
+    0x5534: "Whose curse shall I lift?",
+    0x5554: "Whom shall I revive?",
+    0x5570: "Whom shall I treat?",
+    0x558c: "Whom shall I restore?",
+    0x55a8: "Uncurse whom?",
+    0x55c0: "Revive whom?",
+    0x55d8: "Treat whom?",
+    0x55ec: "Restore whom?",
+    0x5604: "Whose curse shall we lift?",
+    0x5620: "Whom shall we revive?",
+    0x563c: "Whom shall we treat?",
+    0x5658: "Whom shall we restore?",
+    0x5674: "Need more cash",
+
+    # Shop transaction text. Several shopkeeper personalities share the same
+    # mechanics but retain distinct registers in their greetings and replies.
+    0x5684: "You're short on cash.",
+    0x569c: "You can't carry more.",
+    0x56b4: "That's the total. Okay?",
+    0x56d0: "How many?",
+    0x56e4: "We sell recovery items, too!",
+    0x5708: "Which one?",
+
+    0x571c: "You're short on cash.",
+    0x5734: "You can't carry any more.",
+    0x5750: "Total okay?",
+    0x5764: "How many?",
+    0x5774: "Come by anytime!",
+    0x5790: "Which one, then?",
+
+    0x57a8: "Not enough.",
+    0x57b8: "I've no more to sell.",
+    0x57d0: "Come back if you want more.",
+    0x57f0: "Which one?",
+
+    0x5804: "Your offering is lacking.",
+    0x5820: "How many?",
+    0x5834: "Return whenever you have need.",
+    0x5854: "Which one?",
+
+    0x5868: "Can't equip it. Still buy?",
+    0x5884: "You aren't in any state to shop.",
+    0x58a8: "You can't carry more cash.",
+    0x58c8: "You're short on cash.",
+    0x58e0: "Inventory is full.",
+    0x58f8: "Equip it now?",
+    0x5908: "Total is... OK?",
+    0x591c: "How many?",
+    0x5930: "Thanks a bunch!",
+    0x5944: "Selling what?",
+    0x5958: "I can't buy anything you have. Sorry.",
+    0x5984: "So, what will you buy?",
+    0x59a0: "Junk Shop: Step right up!",
+
+    0x59c0: "Equip it right away?",
+    0x59d8: "Total okay?",
+    0x59f0: "How many?",
+    0x5a04: "Thanks.",
+    0x5a10: "Sell what?",
+    0x5a20: "I can't buy any of that. Bring me something worthwhile.",
+    0x5a64: "Buy what?",
+    0x5a74: "Armor Shop: Need something tough?",
+
+    0x5a98: "Can't equip it. Still buy?",
+    0x5ab4: "You're unfit to shop. Come back later.",
+    0x5ae0: "You can't carry more cash.",
+    0x5b00: "Inventory is full.",
+    0x5b18: "Total okay?",
+    0x5b2c: "Thanks. Come again.",
+    0x5b44: "Got something to sell?",
+    0x5b60: "Nothing I can buy. Bring me something good next time.",
+    0x5b9c: "All fine weapons here.",
+    0x5bb4: "Weapon Shop: Welcome.",
+
+    0x5bcc: "Can't equip it. Still purchase?",
+    0x5bf0: "You are in no state to shop.",
+    0x5c10: "You cannot carry any more cash.",
+    0x5c34: "You lack the funds.",
+    0x5c4c: "Your inventory is full.",
+    0x5c68: "Equip it immediately?",
+    0x5c84: "That is the total. Proceed?",
+    0x5ca4: "How many?",
+    0x5cb4: "Thank you very much.",
+    0x5cd0: "What would you like to sell?",
+    0x5cf0: "I cannot buy any of that. Bring me other goods.",
+    0x5d24: "What would you like?",
+    0x5d3c: "Armor Shop: We stop any attack!",
+
+    0x5d60: "You can't equip it. Is that okay?",
+    0x5d84: "You can't shop right now.",
+    0x5da0: "You can't carry so much cash.",
+    0x5dc0: "Sorry, but I can't lower the price any further.",
+    0x5df4: "Inventory is full.",
+    0x5e0c: "That is the total. Proceed?",
+    0x5e2c: "Thank you. Please come again.",
+    0x5e50: "Which item will you sell me?",
+    0x5e70: "What will you buy?",
+    0x5e84: "Weapon Shop: Finest blades here.",
+
+    0x5ea8: "Y-You can't carry that much cash.",
+    0x5ecc: "Y-You need more cash.",
+    0x5ee4: "Y-You can't carry more.",
+    0x5f00: "Th-That's the total. Is it okay?",
+    0x5f24: "H-How many?",
+    0x5f3c: "Th-Thank you very much.",
+    0x5f58: "Wh-What will you sell?",
+    0x5f78: "I-I can't buy that. Please bring something else.",
+    0x5fac: "Wh-What will you buy?",
+    0x5fc8: "Hanoun: O-Oh! Welcome.",
+
+    0x5fec: "Can't equip it. Still buy?",
+    0x6008: "No shopping until you heal up.",
+    0x602c: "No more cash. Don't be greedy.",
+    0x6054: "Not enough cash. Bring more.",
+    0x607c: "Bag's full. Don't be greedy.",
+    0x609c: "Equip it now?",
+    0x60b0: "Total okay?",
+    0x60c4: "How many?",
+    0x60d0: "Much obliged.",
+    0x60e4: "Sell what?",
+    0x60f0: "Nothing I can buy. Bring better goods.",
+    0x6118: "Buy what?",
+    0x6128: "Armor Shop: Welcome.",
+
+    0x6140: "You can't carry so much cash.",
+    0x6160: "You need more cash.",
+    0x617c: "Inventory is full.",
+    0x6194: "Equip it right away?",
+    0x61ac: "That is the total. Okay?",
+    0x61c8: "How many?",
+    0x61dc: "Thank you very much.",
+    0x61f4: "What will you sell?",
+    0x6210: "I can't buy that. Please bring other goods.",
+    0x6240: "What would you like?",
+    0x625c: "Researcher: See our latest work.",
+
+    0x6280: "Can't equip it. Still buy?",
+    0x629c: "Can't shop right now.",
+    0x62b4: "You can't carry so much cash.",
+    0x62d4: "Not enough cash.",
+    0x62e8: "Inventory is full.",
+    0x6300: "Equip it right away?",
+    0x6318: "Total okay?",
+    0x6330: "How many?",
+    0x6344: "Thanks.",
+    0x6350: "What are you selling me?",
+    0x636c: "Nothing I can buy. Bring useful goods.",
+    0x6394: "What will you buy?",
+    0x63a8: "Junk Shop: Need something?",
+
+    0x63c4: "Can't equip it. Still want it?",
+    0x63e8: "You can't shop right now.",
+    0x6404: "You can't carry so much cash.",
+    0x6424: "You're short on cash.",
+    0x643c: "Inventory is full.",
+    0x6454: "Equip it right away, dear?",
+    0x6470: "That's the total. All right?",
+    0x6490: "How many would you like?",
+    0x64ac: "Thanks! Come again, dear.",
+    0x64cc: "What would you like to sell?",
+    0x64ec: "Nothing I can buy, dear. Bring me something else.",
+    0x6520: "What would you like, dear?",
+    0x653c: "Armor Shop: Welcome, dear!",
+
+    0x655c: "Can't equip it. Still buy?",
+    0x6578: "You can't shop right now.",
+    0x6594: "You can't carry so much cash.",
+    0x65b4: "Not enough money.",
+    0x65c8: "Inventory is full.",
+    0x65e0: "Equip it now?",
+    0x65f8: "Total okay?",
+    0x6610: "How many?",
+    0x6624: "Thanks. Come again.",
+    0x663c: "Anything to sell me?",
+    0x6658: "Nothing I can buy. Bring me something worthwhile.",
+    0x6694: "What will you buy?",
+    0x66a8: "Weapon Shop: Welcome.",
+
+    # Equipment comparison and a small shop reward sequence.
+    0x6700: "Attack",
+    0x6708: "Hit",
+    0x6710: "Hits",
+    0x671c: "DEF",
+    0x6724: "Evade",
+    0x672c: "Affin.",
+    0x6734: "Effect",
+    0x6740: "Align",
+    0x6778: "What now?",
+    0x67c8: "Curse prevents removal!",
+    0x6800: " ",
+    0x6840: "...Wait a moment.",
+    0x685c: "You came all this way. Take this.",
+    0x6884: "Keep coming back, all right?",
+    0x68b0: '>Obtained the "Mercury Pillar."',
+
+    # Live file-specific load confirmation table. map_names.py intentionally
+    # leaves these four entries in place because they are not map names.
+    0x6a20: "Load File 1.",
+    0x6a3c: "Proceed?",
+    0x6a54: "Load File 2.",
+    0x6a70: "Load File 3.",
+
+    # Direct event literal outside the compressed dialogue banks.
+    0x75a8: ">An earthquake struck!",
+}
+
+
 # Save-file LIST entries are sprintf format strings that begin with the JP game title
 # 真・女神転生２ (7 fullwidth chars = 14 bytes) followed by ` ＱＵＩＴ/ＦＩＬＥ%s ...ＬＶ%s%s`.
 # We swap ONLY the title -> fullwidth "SMT2", preserving the whole %s/spacing tail exactly.
@@ -387,6 +689,18 @@ def apply_sys(exe):
         if len(data) > gap:
             raise SystemExit(
                 f"sys 0x{off:x} OVERFLOW {len(data)}>{gap} bytes: {en!r}")
+        exe[off:off + gap] = data + bytes(gap - len(data))
+    for off, en in AUDITED_SYSTEM_TEXT.items():
+        if off in SYS:
+            raise SystemExit(f"audited sys 0x{off:x}: duplicate SYS entry")
+        end = exe.index(0, off) + 1
+        gap = ((end - off + 3) // 4) * 4
+        if any(exe[end:off + gap]):
+            raise SystemExit(f"audited sys 0x{off:x}: nonzero slot padding")
+        data = _ascii(en)
+        if len(data) > gap:
+            raise SystemExit(
+                f"audited sys 0x{off:x} OVERFLOW {len(data)}>{gap} bytes: {en!r}")
         exe[off:off + gap] = data + bytes(gap - len(data))
     # save-file list title: replace 真・女神転生２ -> ＳＭＴ　ＩＩ, keep the format tail intact
     new_title = _fw("SMT II")
@@ -403,3 +717,9 @@ def apply_sys(exe):
             exe[off + i] = new[i]
         for i in range(len(new), gap):  # NUL-pad the freed bytes
             exe[off + i] = 0
+
+    # A build-time assertion for every audited player-facing slot. This catches a
+    # future patch ordering change that might restore Japanese data after this pass.
+    for off in (*SYS, *AUDITED_SYSTEM_TEXT):
+        if exe[off] != ASCII_MARKER:
+            raise SystemExit(f"sys audit: 0x{off:x} is not marker-prefixed English")
