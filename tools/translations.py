@@ -4436,4 +4436,56 @@ TRANS = {
     0x612b:['PG',"You cannot carry any more.",'WT','ED'],
     0x612c:["Try entering it again?",'ED'],
 
+    # ---- Bank 7: clear data / shop responses / Izanami endings ----
+    # 0x7000-0x7005 and 0x7008 are control-only continuations. 0x7006 and
+    # 0x7007 are internal one-kanji markers with no player-facing English
+    # equivalent, so their translated streams intentionally contain only ED.
+    0x7000:[(0xc095,True),'ED'],
+    0x7001:[(0xc097,True),'ED'],
+    0x7002:[(0xc098,True),'ED'],
+    0x7003:[(0xc096,True),'ED'],
+    0x7004:[(0xc099,True),'ED'],
+    0x7005:[(0xc09a,True),'ED'],
+    0x7006:['ED'],
+    0x7007:['ED'],
+    0x7008:[(0xc09d,True),'ED'],
+
+    0x7009:["Saving Clear Data lets you carry",'CR',"your completion data into",'CR',
+      "a new game.",'CR',"Save Clear Data?",'ED'],
+    0x700a:["Choose a mode for your new game.",'ED'],
+    0x700b:["Finish saving Clear Data and",'CR',"return to the title screen.",'CR',
+      "Is that okay?",'ED'],
+
+    0x700c:["Izanami: Welcome,",'CR','SY',".",'CR','WT','PG',
+      "I hear you saved my child Hiruko",'CR',"in the Underworld.",'CR',
+      "You have my thanks.",'WT','PG','SY',".",'CR','WT',
+      "Do not lose sight of the person",'CR',"most precious to you.",'CR',
+      "Never let them leave your side.",'WT','ED'],
+    0x700d:['AL',"'s attack missed.",'WT','ED'],
+
+    # Each response retains the register of its original shopkeeper.
+    0x700e:["You don't seem to have enough money.",'TW','ED'],
+    0x700f:["You don't seem to have enough money.",'TW','ED'],
+    0x7010:["You don't seem to have enough money.",'TW','ED'],
+    0x7011:["You're short on cash...",'TW','ED'],
+    0x7012:["Bring me some money, 'kay?",'TW','ED'],
+    0x7013:["You don't have enough money.",'TW','ED'],
+    0x7014:["...You're short on cash, huh?",'TW','ED'],
+    0x7015:["Your order has already been placed.",'TW','ED'],
+    0x7016:["You have already placed an order.",'TW','ED'],
+    0x7017:["You're already drinking...",'TW','ED'],
+    0x7018:["It appears you are already drinking.",'TW','ED'],
+    0x7019:["Order something else, 'kay?",'TW','ED'],
+    0x701a:["You're already drinking.",'TW','ED'],
+    0x701b:["...You're already drinking.",'TW','ED'],
+    0x701c:['MG',"'s attack missed.",'WT','ED'],
+
+    0x701d:["Izanami: Welcome,",'CR','SY',",",'CR','Fe',".",'WT','PG',
+      'SY',",",'CR','Fe',".",'WT',"Seeing you two together reminds me",'CR',
+      "of the happy days Izanagi and I",'CR',"once shared.",'WT','ED'],
+    0x701e:["Izanami: Welcome,",'CR','SY',".",'WT','PG','SY',".",'CR','WT',
+      "Do not lose sight of the person",'CR',"most precious to you.",'CR',
+      "Never let them leave your side.",'WT','ED'],
+    0x701f:['AG'," is warded.",'TW','ED'],
+
 }
