@@ -147,21 +147,28 @@ def _place_ab_strings(entries, exe=None):
         placed.append((s,weight)); addrs.append(addr)
     return placed, addrs
 
-def fit_ab_local_dictionary(candidates, shared_count, base_leaves=140):
+def fit_ab_local_dictionary(candidates, base_leaf_count):
     """Trim mined A/B entries to what the free space provably holds.
 
-    Strings: dry-run first-fit placement.  Offset table + tree: leaves =
-    chars/controls (~base_leaves) + shared + local entries; each 16-ary node
-    costs 32 B in the A/B STRUCT table and the u16 offset table must share the
-    remaining tail, so drop the least-valuable entries until both fit.
+    ``base_leaf_count`` is measured from the actual Bank 4/5 corpus tokenized
+    with the shared dictionary. Each local entry can add at most one leaf;
+    replacement may remove base leaves, making this bound conservative. Each
+    16-ary node costs 32 B, and the u16 offset table must share a tree tail.
     """
     placed,_=_place_ab_strings(candidates)
-    while placed:
-        leaves=base_leaves+shared_count+len(placed)
-        nodes=-(-(leaves-1)//15)+1         # +1 for the root split
-        if 32*nodes+2*len(placed)<=AB_STCAP: break
+    while True:
+        leaves=base_leaf_count+len(placed)
+        padded_leaves=leaves+(-(leaves-1))%15
+        nodes=(padded_leaves-1)//15
+        if nodes:
+            nodes+=1                       # reserve invalid root nibble 0
+        if 32*nodes+2*len(placed)<=AB_STCAP:
+            return placed
+        if not placed:
+            raise SystemExit(
+                f"base A/B tree cannot fit: {base_leaf_count} leaves"
+            )
         placed.pop()
-    return placed
 
 def install_ab_runtime(exe):
     """Write the A/B-local dictionary runtime.
@@ -362,7 +369,9 @@ def build_ab_tree(exe, messages):
     ``(0x8140, True, dispatch_index)`` because the stock tree assigns several
     different runtime operations the same nominal space symbol. Authored
     English may also use shared-dictionary leaves shaped as
-    ``(dictionary_symbol, True, DICT_JT_INDEX)``.
+    ``(dictionary_symbol, True, DICT_JT_INDEX)``. ``messages`` contains one
+    occurrence per physically stored stream, prepared by build.py after each
+    independently interned block has been deduplicated.
     """
     import heapq
     from collections import Counter, deque

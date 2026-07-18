@@ -4109,7 +4109,7 @@ TRANS = {
     0x406d:["Are you truly ",'A14','A0F'],
     0x406e:["You serious",'A14','A0F'],
     0x406f:["For real",'A14','A0F'],
-    0x4070:["For real",'A14','A0F'],
+    0x4070:["IS THIS TRUE",'A14','A0F'],
     0x4071:["You utter fool!",'A0F','A0F'],
     0x4072:["You're beyond saving, idiot!!",'A0F'],
     0x4073:["You total screwball!",'A0F','A0F'],
