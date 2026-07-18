@@ -4106,10 +4106,10 @@ TRANS = {
     0x406a:["Oh... Is that so?",'A65',"You'll get what's coming to you!",'A0F','A0F'],
     0x406b:["Whoa, what a cheapskate!",'A65',"Count me out!",'A0F','A0F'],
     0x406c:["I WANT NOTHING MORE TO DO WITH YOU!",'A0F'],
-    0x406d:["Are you certain",'A14','A0F'],
+    0x406d:["Are you truly ",'A14','A0F'],
     0x406e:["You serious",'A14','A0F'],
     0x406f:["For real",'A14','A0F'],
-    0x4070:["IS THIS TRUE",'A14','A0F'],
+    0x4070:["For real",'A14','A0F'],
     0x4071:["You utter fool!",'A0F','A0F'],
     0x4072:["You're beyond saving, idiot!!",'A0F'],
     0x4073:["You total screwball!",'A0F','A0F'],
@@ -4830,7 +4830,7 @@ TRANS = {
     0x4307:["What?!",'A0F','A0F'],
     0x4308:["What?!",'A0F','A0F'],
     0x4309:["I cannot allow this...",'A0F','A0F'],
-    0x430a:["I shall not forgive you!",'A0F'],
+    0x430a:["I won't forgive you!",'A0F'],
     0x430b:["Unforgivable!",'A0F'],
     0x430c:["Divine retribution is at hand!!",'A0F','A0F'],
     0x430d:["You appear eager to die!",'A0F'],
@@ -4902,7 +4902,7 @@ TRANS = {
     0x4346:["Then, one more thing.",'A0F','A0F'],
     0x4347:["Then, one more thing.",'A0F','A0F'],
     0x4348:["Will you offer me something?",'A0F'],
-    0x4349:["Might you give me something?",'A0F','A0F'],
+    0x4349:["Might I have something?",'A0F','A0F'],
     0x434a:["Do you intend to offer something?",'A0F','A0F'],
     0x434b:["You desire my cooperation?",'A0F','A0F'],
     0x434c:["You wish to rely on me?",'A0F'],
@@ -5057,7 +5057,7 @@ TRANS = {
     0x43cf:["Unfortunately, ",'A14'],
     0x43d0:["Unfortunately, ",'A14'],
     0x43d1:["Unfortunately, ",'A14'],
-    0x43d2:["Then ",'A14'],
+    0x43d2:["Then, ",'A14'],
     0x43d3:["In that case, ",'A14','A0F'],
     0x43d4:["In that case, ",'A14','A0F'],
     0x43d5:["In return, ",'A14','A0F'],
@@ -5789,3 +5789,35 @@ TRANS = {
     0x701f:['AG'," is warded.",'TW','ED'],
 
 }
+
+# ---- Bank 4: identical-JP duplicate entries ----
+# Each entry below decodes to byte-identical Japanese as its source entry, so
+# both share one English rendering.  Aliased lists intern to a single stream in
+# the rebuilt block (zero additional bytes); editing the source entry updates
+# every alias automatically.
+TRANS[0x47f8] = TRANS[0x40da]
+TRANS[0x47f9] = TRANS[0x40da]
+TRANS[0x4696] = TRANS[0x4145]
+TRANS[0x4697] = TRANS[0x4145]
+TRANS[0x482e] = TRANS[0x4145]
+TRANS[0x482f] = TRANS[0x4145]
+TRANS[0x4699] = TRANS[0x4149]
+TRANS[0x469a] = TRANS[0x4149]
+TRANS[0x469b] = TRANS[0x4149]
+TRANS[0x4830] = TRANS[0x4149]
+TRANS[0x4831] = TRANS[0x4149]
+TRANS[0x469f] = TRANS[0x4151]
+TRANS[0x4834] = TRANS[0x4151]
+TRANS[0x4835] = TRANS[0x4151]
+TRANS[0x46a0] = TRANS[0x4153]
+TRANS[0x4808] = TRANS[0x4275]
+TRANS[0x4809] = TRANS[0x4275]
+TRANS[0x45d6] = TRANS[0x430b]
+TRANS[0x47b8] = TRANS[0x4319]
+TRANS[0x47ee] = TRANS[0x4319]
+TRANS[0x47ef] = TRANS[0x4319]
+TRANS[0x4612] = TRANS[0x4345]
+TRANS[0x469c] = TRANS[0x43cf]
+TRANS[0x469d] = TRANS[0x43cf]
+TRANS[0x46a2] = TRANS[0x43d5]
+TRANS[0x46a3] = TRANS[0x43d5]

@@ -47,13 +47,21 @@ def configure_dictionary(entries, code_base):
     for s in sorted(_DCODE, key=len, reverse=True):
         _DBYFIRST.setdefault(s[0], []).append(s)
 
-def configure_ab_dictionary(strings):
-    """Enable a capped subset of the shared dictionary for authored A/B text."""
+def configure_ab_dictionary(strings, local_entries=(), local_code_base=None):
+    """Enable dictionary matching for authored A/B text.
+
+    ``strings`` reuse the shared C/D entries (and codes); ``local_entries``
+    are the A/B-only mined entries, numbered from ``local_code_base`` in list
+    order (must equal the install order in build_prod_exe)."""
     _AB_DCODE.clear(); _AB_DBYFIRST.clear()
     missing=[s for s in strings if s not in _DCODE]
     if missing:
         raise ValueError(f"A/B dictionary entries were not configured: {missing!r}")
     _AB_DCODE.update({s:_DCODE[s] for s in strings})
+    for i,(s,_weight) in enumerate(local_entries):
+        if s in _AB_DCODE:
+            raise ValueError(f"A/B local entry duplicates a shared entry: {s!r}")
+        _AB_DCODE[s]=local_code_base+i
     for s in sorted(_AB_DCODE, key=len, reverse=True):
         _AB_DBYFIRST.setdefault(s[0], []).append(s)
 
