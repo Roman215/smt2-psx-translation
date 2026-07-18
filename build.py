@@ -20,6 +20,7 @@ sys.path.insert(0, "tools")
 import build_en_tree as ET, block_rebuild as BR, build_prod_exe as BP, translate_pipeline as TP
 import name_tables as NT, translations as TR, menu_table as MT, sys_strings as SS
 import rdlogo as RD, map_names as MN, status_screen as STATUS
+import opening_movie as OM
 from cdecc import fix_mode2form1
 import pyxdelta
 
@@ -755,7 +756,18 @@ def apply_banks(exe, packa, slpm, PATHS):
     return packa
 
 # ============================ 5. PATCH + XDELTA ============================
-def make_patch(input_bin, exe, packa, slpm, packa0, cmdinit=None, cmdinit0=None, rdlogo=None, rdlogo0=None):
+def make_patch(
+    input_bin,
+    exe,
+    packa,
+    slpm,
+    packa0,
+    cmdinit=None,
+    cmdinit0=None,
+    rdlogo=None,
+    rdlogo0=None,
+    opening=None,
+):
     bind=bytearray(Path(input_bin).read_bytes())
     em=lambda f:(67202+f//2048)*2352+24+(f%2048)          # exe -> bin
     pm=lambda f:(68191+f//2048)*2352+24+(f%2048)          # PACKA -> bin
@@ -811,6 +823,21 @@ def make_patch(input_bin, exe, packa, slpm, packa0, cmdinit=None, cmdinit0=None,
             for i,v in enumerate(subheader): edits.append((sec*2352+16+i,v))
     aff=set()
     for bo,v in edits: bind[bo]=v; aff.add(bo//2352)
+    if opening is not None:
+        expected = OM.OPENING_SECTORS * OM.USER_DATA_SIZE
+        if len(opening) != expected:
+            raise SystemExit(
+                f"rebuilt OPENING.STR has invalid size {len(opening):,}; expected {expected:,}"
+            )
+        # OPENING.STR is a video-only Form 1 stream: one 2048-byte STR chunk
+        # per physical sector.  Write it in place and retain the stock sector
+        # headers/submode flags so no ISO extent or movie seek logic changes.
+        for rel in range(OM.OPENING_SECTORS):
+            sec = OM.OPENING_LBA + rel
+            src = rel * OM.USER_DATA_SIZE
+            dst = sec * 2352 + 24
+            bind[dst:dst+OM.USER_DATA_SIZE] = opening[src:src+OM.USER_DATA_SIZE]
+            aff.add(sec)
     for sec in aff:
         so=sec*2352; s=bytearray(bind[so:so+2352]); fix_mode2form1(s); bind[so:so+2352]=s
     os.makedirs("build", exist_ok=True)
@@ -870,8 +897,17 @@ def main(argv=None):
     parser.add_argument(
         "--input", metavar="BIN", help="source Japan Rev 1 MODE2/2352 BIN (default: auto-detect)"
     )
+    parser.add_argument(
+        "--ffmpeg", metavar="EXE", help="FFmpeg executable used to decode the opening movie"
+    )
+    parser.add_argument(
+        "--psxavenc", metavar="EXE", help="psxavenc executable used to rebuild the opening movie"
+    )
+    parser.add_argument(
+        "--skip-opening", action="store_true", help="leave the Japanese opening movie unchanged"
+    )
     args = parser.parse_args(argv)
-    print("[1/6] mining compression dictionary...")
+    print("[1/7] mining compression dictionary...")
     dictionary, dictionary_bytes = mine_dictionary(BP.DICT_RUNTIME_BUDGET)
     BP.configure_dictionary(dictionary)
     TP.configure_dictionary(dictionary, BP.DICT_CODE_BASE)
@@ -895,12 +931,32 @@ def main(argv=None):
     packa0 = extract_from_bin(bind, 68191, PACKA_SIZE)
     cmdinit0 = extract_from_bin(bind, CMDINIT_SECTOR, CMDINIT_SIZE)
     rdlogo0 = extract_from_bin(bind, RDLOGO_SECTOR, RDLOGO_SIZE)
-    print("[2/6] kerning font...")
+    print("[2/7] kerning font...")
     font_slpm, widths, widths10 = kern_font(slpm)
-    print("[3/6] building exe (VWF hook + dictionary-compressed C/D tree)...")
+    opening = None
+    if args.skip_opening:
+        print("[3/7] leaving OPENING.STR unchanged (--skip-opening)")
+    else:
+        print("[3/7] rebuilding English OPENING.STR...")
+        ffmpeg = OM.find_tool(args.ffmpeg, "ffmpeg")
+        local_psxavenc = Path("build/psxavenc/bin/psxavenc.exe")
+        if not local_psxavenc.is_file():
+            local_psxavenc = Path("build/psxavenc/bin/psxavenc")
+        psxavenc = OM.find_tool(args.psxavenc, "psxavenc", local_psxavenc)
+        opening_path = OM.generate_opening(
+            input_bin,
+            font_slpm,
+            widths,
+            Path("build/OPENING_EN.str"),
+            ffmpeg=ffmpeg,
+            psxavenc=psxavenc,
+        )
+        opening = opening_path.read_bytes()
+        print(f"  opening: {len(opening) // OM.USER_DATA_SIZE} sectors, {OM.FRAME_COUNT} frames")
+    print("[4/7] building exe (VWF hook + dictionary-compressed C/D tree)...")
     exe = build_exe(font_slpm, widths, widths10, slpm)
     PATHS = BR.build_paths(0x80117ec4, 0x801187a4, exe)
-    print("[4/6] applying name tables")
+    print("[5/7] applying name tables")
     apply_name_tables(exe, slpm, PATHS)
     cmdinit = bytearray(cmdinit0)
     apply_cmdinit_names(cmdinit)             # REAL new-game party names (CMDINIT.BIN)
@@ -909,11 +965,22 @@ def main(argv=None):
     rdlogo = RD.patch_rdlogo(rdlogo0)        # boot disclaimer -> English (fullwidth, repointed)
     MT.rebuild_menu(exe, PATHS)
     SS.apply_sys(exe)                        # boot-safe system strings, kept in their original slots
-    print("[5/6] applying dialogue + menu banks...")
+    print("[6/7] applying dialogue + menu banks...")
     packa = apply_banks(exe, packa0, slpm, PATHS)
     STATUS.patch_status_texture(packa, exe)
-    print("[6/6] patching bin + xdelta...")
-    ok, sectors = make_patch(input_bin, exe, packa, slpm, packa0, cmdinit, cmdinit0, rdlogo, rdlogo0)
+    print("[7/7] patching bin + xdelta...")
+    ok, sectors = make_patch(
+        input_bin,
+        exe,
+        packa,
+        slpm,
+        packa0,
+        cmdinit,
+        cmdinit0,
+        rdlogo,
+        rdlogo0,
+        opening,
+    )
     print(f"DONE. {OUT_XDELTA} ok={ok}, {sectors} sectors, {os.path.getsize(OUT_XDELTA)} bytes")
 
 if __name__ == "__main__":
