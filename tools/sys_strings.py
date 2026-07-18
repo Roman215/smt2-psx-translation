@@ -161,6 +161,22 @@ SYS = {
     0x1e20: (8, "Bdy"),                   # 胴防具
     0x1e28: (8, "Swd"),                   # 合体剣 (fusion sword)
 
+    # ===================== EQUIPMENT AFFINITIES =====================
+    # Armor 相性 values. This is damage affinity/resistance, distinct from
+    # the 属性 equip-alignment row whose values are ALL/L/N/C. Each entry is
+    # kept in its original fixed slot and within the equipment detail pane.
+    0x2fc0: (8,  "Phys"),                  # 物理
+    0x2fc8: (16, "Repel Mind"),            # 反精神
+    0x2fd8: (16, "Fire/Ice"),              # 対火炎・氷結
+    0x2fe8: (16, "Elec/Force"),            # 対電撃・衝撃
+    0x2ff8: (16, "Res Phys"),              # 対物理
+    0x3008: (16, "Res Mind"),              # 対精神
+    0x3018: (16, "Res Force"),             # 対衝撃
+    0x3028: (16, "Res Elec"),              # 対電撃
+    0x3038: (16, "Res Ice"),               # 対氷結
+    0x3048: (16, "Res Fire"),              # 対火炎
+    0x3058: (16, "Normal"),                # ノーマル
+
     # ===================== STAT / SHOP / CASINO =====================
     0x1d5c: (16, "Points"),               # 残りポイント (level-up points left)
     0x2308: (12, "Exit"),                 # 店を出る (leave shop)
