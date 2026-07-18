@@ -74,7 +74,13 @@ def dictionary_corpus_texts():
         if message_id >> 12 not in {0,1,2,3,6,7}:
             continue
         for part in author:
-            if isinstance(part, str) and part not in TP.CTRL_NAME:
+            if not isinstance(part, str):
+                continue
+            if part in TP.CTRL_NAME:
+                suffix = TP.CONTROL_SUFFIX.get(part)
+                if suffix:
+                    parts.append(suffix)
+            else:
                 parts.append(part)
     return parts
 
@@ -84,10 +90,15 @@ def select_ab_dictionary(entries):
     for message_id,author in TR.TRANS.items():
         if message_id>>12 not in {4,5}:
             continue
-        texts.extend(
-            part for part in author
-            if isinstance(part,str) and part not in TP.AB_CTRL_INDEX
-        )
+        for part in author:
+            if not isinstance(part, str):
+                continue
+            if part in TP.AB_CTRL_INDEX:
+                suffix = TP.AB_CONTROL_SUFFIX.get(part)
+                if suffix:
+                    texts.append(suffix)
+            else:
+                texts.append(part)
     ranked=[]
     for text,_weight in entries:
         count=sum(part.count(text) for part in texts)
@@ -318,8 +329,88 @@ def build_exe(font_slpm, widths, widths10, slpm):
     # each byte to the corresponding existing fullwidth SJIS glyph before calling the stock blit,
     # so they retain this same VWF/font while unmarked Japanese remains on the stock path.
     _install_sys_printer(exe, w32)
+    _patch_message_control_literals(exe, w32)
     _relocate_bank7_base(exe, w32)
     return exe
+
+
+def _patch_message_control_literals(exe, w32):
+    """Translate Japanese text emitted directly by message-dispatch handlers.
+
+    Most dialogue text lives in the compressed banks, but three dispatch paths
+    append stock SJIS literals from the executable instead:
+
+    * AG/A6F appends ``たち`` after the dynamically selected party leader.
+    * PP selects one of six Japanese stat labels.
+    * synthetic dispatch slot 89 appends the Bar's drink-selection prompt.
+
+    Make the party-leader insert name-only so translate_pipeline.py can append
+    ``'s party`` automatically, and translate the fixed literals in their
+    original slots. The stat abbreviations match the localized status screen.
+    """
+    def expect(address, expected, description):
+        offset = foff(address)
+        actual = bytes(exe[offset:offset + len(expected)])
+        if actual != expected:
+            raise SystemExit(
+                f"{description} at {address:#x}: expected {expected.hex()}, "
+                f"got {actual.hex()}"
+            )
+
+    def fullwidth_z(text):
+        out = bytearray()
+        for char in text:
+            out += ET.fullwidth(char).to_bytes(2, "big")
+        out.append(0)
+        return bytes(out)
+
+    def replace_slot(address, size, expected, english, description):
+        expect(address, expected.ljust(size, b"\0"), description)
+        encoded = fullwidth_z(english)
+        if len(encoded) > size:
+            raise SystemExit(
+                f"{description} does not fit: {len(encoded)}>{size} bytes"
+            )
+        offset = foff(address)
+        exe[offset:offset + size] = encoded.ljust(size, b"\0")
+
+    # AG and A6F share dispatch index 111. The stock handler first emits the
+    # selected leader name, then calls the string appender on 0x80013718
+    # (SJIS たち). Suppress only that second append; the name call at
+    # 0x80061d70 remains intact.
+    for address, expected in (
+        (0x80061d78, 0x3c048001),  # lui   $a0, 0x8001
+        (0x80061d7c, 0x0c016091),  # jal   0x80058244
+        (0x80061d80, 0x24843718),  # addiu $a0, $a0, 0x3718
+    ):
+        actual = struct.unpack_from("<I", exe, foff(address))[0]
+        if actual != expected:
+            raise SystemExit(
+                f"AG suffix site {address:#x}: expected {expected:#010x}, "
+                f"got {actual:#010x}"
+            )
+        w32(address, 0)
+    expect(0x80013718, bytes.fromhex("82bd82bf00000000"), "AG たち literal")
+    exe[foff(0x80013718):foff(0x80013720)] = b"\0" * 8
+
+    # Synthetic dispatcher slot 89 owns this prompt; it is not a compressed
+    # message and therefore is not covered by translations.py.
+    replace_slot(
+        0x80013668, 24,
+        bytes.fromhex("82c782bf82e782aa88f982dd82dc82b782a98148"),
+        "Your drink?", "Bar drink prompt",
+    )
+
+    stat_slots = (
+        (0x80013778, bytes.fromhex("97cd8140"), "ST"),
+        (0x80013780, bytes.fromhex("926d8c628140"), "IN"),
+        (0x80013788, bytes.fromhex("968297cd8140"), "MA"),
+        (0x80013790, bytes.fromhex("91cc97cd8140"), "VI"),
+        (0x80013798, bytes.fromhex("91ac82b38140"), "AG"),
+        (0x800137a0, bytes.fromhex("895e8140"), "LU"),
+    )
+    for address, expected, english in stat_slots:
+        replace_slot(address, 8, expected, english, f"PP stat label {english}")
 
 # ---- Object-compositor VWF (12px and 10px fullwidth fonts) -----------------------------
 # The object compositor at 0x8004c5ac (Equip captions, party/status name plates;

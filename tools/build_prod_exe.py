@@ -90,7 +90,12 @@ def _corpus_freqs(cidx):
             continue
         for part in author:
             if isinstance(part,tuple): ctrls[part[0]]+=1          # raw token
-            elif part in TP.CTRL_NAME: ctrls[TP.CTRL_NAME[part][0]]+=1
+            elif part in TP.CTRL_NAME:
+                ctrls[TP.CTRL_NAME[part][0]]+=1
+                suffix=TP.CONTROL_SUFFIX.get(part)
+                if suffix:
+                    for sym,is_ctl in TP.text_tokens(suffix):
+                        (dicts if is_ctl else chars)[sym]+=1
             else:
                 for sym,is_ctl in TP.text_tokens(part):
                     (dicts if is_ctl else chars)[sym]+=1

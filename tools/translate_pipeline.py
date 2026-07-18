@@ -7,6 +7,11 @@ Translated messages are authored as lists mixing text strings and control names:
   TRANS[msgid] = ["Okamoto: Hi", 'CR', "Hawk!", 'WT','PG', ...JP-insert names..., 'ED']
 Control names: CR WT PG ED SY SN Fe TI IT FI FO NI AG SU MN KO OT ZK ZO MG MH PP AL SE
 Insert codes (SY/SN/Fe/...) must be kept where they were in the original.
+
+AG and the A/B control A6F insert only the dynamic party-leader name in the
+English executable. Their shared stock handler also appended Japanese ``たち``;
+build.py removes that suffix, and this module automatically emits ``'s party``
+after either authored control so translations.py can retain the stock structure.
 """
 import struct, sys
 sys.path.insert(0, "tools")
@@ -22,6 +27,10 @@ CTRL_NAME={n:(struct.unpack(">H",n.encode("ascii"))[0],True) for n in
 AB_CTRL_INDEX={f"A{i:02X}":i for i in
   (0x0E,0x0F,0x14,0x61,0x62,0x63,0x64,0x65,0x66,0x67,0x68,0x69,
    0x6B,0x6E,0x6F)}
+
+PARTY_LEADER_SUFFIX = "'s party"
+CONTROL_SUFFIX = {"AG": PARTY_LEADER_SUFFIX}
+AB_CONTROL_SUFFIX = {"A6F": PARTY_LEADER_SUFFIX}
 
 # Dictionary matching configured by build.py after mining the current corpus.
 # Matching is case-sensitive and greedy-longest: buckets are per first char,
@@ -64,8 +73,25 @@ def author_to_tokens(author):
     toks=[]
     for part in author:
         if isinstance(part,tuple): toks.append(part)               # raw token
-        elif part in CTRL_NAME:   toks.append(CTRL_NAME[part])     # control name
+        elif part in CTRL_NAME:
+            toks.append(CTRL_NAME[part])                           # control name
+            suffix=CONTROL_SUFFIX.get(part)
+            if suffix: toks+=text_tokens(suffix)
         else:                     toks+=text_tokens(part)          # text
+    return toks
+
+def _ab_text_tokens(text):
+    toks=[]; i=0
+    while i<len(text):
+        for cand in _AB_DBYFIRST.get(text[i],()):
+            if text.startswith(cand,i):
+                toks.append((_AB_DCODE[cand],True,BP.DICT_JT_INDEX))
+                i+=len(cand)
+                break
+        else:
+            try: toks.append((ET.fullwidth(text[i]),False))
+            except KeyError: toks.append((ET.fullwidth(' '),False))
+            i+=1
     return toks
 
 def ab_author_to_tokens(author):
@@ -76,18 +102,10 @@ def ab_author_to_tokens(author):
             toks.append(part)
         elif part in AB_CTRL_INDEX:
             toks.append((0x8140,True,AB_CTRL_INDEX[part]))
+            suffix=AB_CONTROL_SUFFIX.get(part)
+            if suffix: toks+=_ab_text_tokens(suffix)
         else:
-            i=0
-            while i<len(part):
-                for cand in _AB_DBYFIRST.get(part[i],()):
-                    if part.startswith(cand,i):
-                        toks.append((_AB_DCODE[cand],True,BP.DICT_JT_INDEX))
-                        i+=len(cand)
-                        break
-                else:
-                    try: toks.append((ET.fullwidth(part[i]),False))
-                    except KeyError: toks.append((ET.fullwidth(' '),False))
-                    i+=1
+            toks+=_ab_text_tokens(part)
     return toks
 
 def placeholder(orig_tokens):
