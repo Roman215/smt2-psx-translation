@@ -22,6 +22,7 @@ sys.path.insert(0, "tools")
 import build_en_tree as ET, block_rebuild as BR, build_prod_exe as BP, translate_pipeline as TP
 import name_tables as NT, translations as TR, menu_table as MT, sys_strings as SS
 import rdlogo as RD, map_names as MN, status_screen as STATUS
+import name_entry as NE
 import opening_movie as OM
 from cdecc import fix_mode2form1
 
@@ -1313,9 +1314,11 @@ def main(argv=None):
     rdlogo = RD.patch_rdlogo(rdlogo0)        # boot disclaimer -> English (fullwidth, repointed)
     MT.rebuild_menu(exe, PATHS)
     SS.apply_sys(exe)                        # boot-safe system strings, kept in their original slots
+    NE.apply_name_entry(exe)                 # naming-screen kana grid -> A-Z/a-z/0-9 + specials
     print("[6/7] applying dialogue + menu banks...")
     packa = apply_banks(exe, packa0, slpm, PATHS)
     STATUS.patch_status_texture(packa, exe)
+    NE.patch_atlas(packa, slpm)              # naming-grid atlas texture -> English glyphs
     print("[7/7] writing patched BIN...")
     sectors = write_patched_bin(
         input_bin,
