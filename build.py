@@ -1315,6 +1315,7 @@ def main(argv=None):
     MT.rebuild_menu(exe, PATHS)
     SS.apply_sys(exe)                        # boot-safe system strings, kept in their original slots
     NE.apply_name_entry(exe)                 # naming-screen kana grid -> A-Z/a-z/0-9 + specials
+    NE.apply_end_button(exe)                 # END button on the Z/z row; no empty-row scrolling
     print("[6/7] applying dialogue + menu banks...")
     packa = apply_banks(exe, packa0, slpm, PATHS)
     STATUS.patch_status_texture(packa, exe)
