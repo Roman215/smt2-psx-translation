@@ -206,7 +206,7 @@ def build_exe(font_slpm, widths, slpm):
     def w32(a, v): struct.pack_into("<I", exe, foff(a), v)
     CAVE, RAW_CAVE, WTABLE = 0x800d7254, 0x800d7294, 0x800d7300
     BACK, RAW_BACK = 0x80048b88, 0x80048284
-    R = {'zero':0,'v1':3,'a0':4,'a2':6,'t6':14,'t7':15,'t8':24,'t9':25,'sp':29}
+    R = {'zero':0,'v0':2,'v1':3,'a0':4,'a2':6,'t6':14,'t7':15,'s2':18,'t8':24,'t9':25,'sp':29}
     I = lambda op,rs,rt,imm: ((op&0x3f)<<26)|((R[rs]&0x1f)<<21)|((R[rt]&0x1f)<<16)|(imm&0xffff)
     Rr = lambda rs,rt,rd,sa,fn: ((R[rs]&0x1f)<<21)|((R[rt]&0x1f)<<16)|((R[rd]&0x1f)<<11)|((sa&0x1f)<<6)|(fn&0x3f)
     lbu=lambda rt,o,rs:I(0x24,rs,rt,o); lhu=lambda rt,o,rs:I(0x25,rs,rt,o)
@@ -234,6 +234,49 @@ def build_exe(font_slpm, widths, slpm):
     raw_id=len(raw_hook); raw_hook+=[lhu('v1',0,'a0'),jj(RAW_BACK),0]
     raw_hook[raw_ib]=beq('t8','zero',((RAW_CAVE+raw_id*4)-((RAW_CAVE+raw_ib*4)+4))>>2)
     for i,wd in enumerate(raw_hook): w32(RAW_CAVE+i*4, wd)
+
+    # The object compositor at 0x8004c5ac (Equip screen and other 4bpp menu
+    # captions; ~200 call sites via the string walker 0x8004c7c0) has a THIRD
+    # independent fixed-width advance: penX(obj+0xa) += the font's full cell
+    # width from the per-font size table 0x800f853c.  English through it lands
+    # on a 12px grid and overruns the 96px name buffers after 8 glyphs.  The
+    # character is in no register at the advance, so the fix is two-staged:
+    # a wrapper on the glyph-index lookup call (0x8004c604: jal 0x8004c55c,
+    # a0 = char ptr) records the char's VWF width in a scratch byte, and the
+    # advance site (0x8004c78c) consumes it.  Gated to 12px-cell fonts so the
+    # 8x8/8x10/10x10 users of this printer keep their stock metrics.
+    OBJ_A, OBJ_B, OBJ_SCR = 0x800d8290, 0x800d82d4, 0x800d72d4
+    OBJ_LOOKUP, OBJ_ADV_RET = 0x8004c55c, 0x8004c794
+    sb=lambda rt,o,rs:I(0x28,rs,rt,o); bne=lambda rs,rt,o:I(0x05,rs,rt,o)
+    jal=lambda t:(0x03<<26)|((t>>2)&0x03ffffff)
+    obj_a=[lui('t9',hi(OBJ_SCR)), sb('zero',lo(OBJ_SCR),'t9'),
+           lbu('t6',0,'a0'), lbu('t7',1,'a0'),
+           addiu('t6','t6',-0x81), sltiu('t8','t6',2),
+           0,                                   # beq t8,zero -> OUT (patched below)
+           sll('t6','t6',8),
+           addu('t6','t6','t7'), lui('t8',hi(WTABLE)), addiu('t8','t8',lo(WTABLE)),
+           addu('t8','t8','t6'), lbu('t8',0,'t8'), 0,
+           sb('t8',lo(OBJ_SCR),'t9'),
+           jj(OBJ_LOOKUP), 0]
+    obj_a[6]=beq('t8','zero',(15-(6+1)))
+    obj_b=[lui('t9',hi(OBJ_SCR)), lbu('t8',lo(OBJ_SCR),'t9'),
+           addiu('t9','t6',-12), bne('t9','zero',(8-(3+1))), 0,
+           beq('t8','zero',(8-(5+1))), 0,
+           addu('t6','t8','zero'),
+           lhu('v0',0xa,'s2'),
+           jj(OBJ_ADV_RET), 0]
+    if len(obj_a)!=17 or len(obj_b)!=11 or OBJ_A+len(obj_a)*4!=OBJ_B or OBJ_B+len(obj_b)*4!=0x800d8300:
+        raise SystemExit("object-printer VWF cave layout changed; re-check reservations")
+    for addr, expect in ((0x8004c604,0x0c013157),   # jal 0x8004c55c
+                         (0x8004c78c,0x9642000a),   # lhu $v0, 0xa($s2)
+                         (0x8004c790,0x00000000)):  # delay-slot nop we rely on
+        got=struct.unpack_from("<I",exe,foff(addr))[0]
+        if got!=expect:
+            raise SystemExit(f"object-printer site {addr:#x}: expected {expect:#010x}, got {got:#010x}")
+    for i,wd in enumerate(obj_a): w32(OBJ_A+i*4, wd)
+    for i,wd in enumerate(obj_b): w32(OBJ_B+i*4, wd)
+    w32(0x8004c604, jal(OBJ_A))
+    w32(0x8004c78c, jj(OBJ_B))
     tbl=bytearray([12])*512
     def sidx(code):
         b1,b2=code>>8,code&0xff; row=(b1-0x81) if b1<0xa0 else (b1-0xc1); return (b2-0x40)+row*189
