@@ -5,7 +5,7 @@ Run from the project root:  python build.py
 Outputs:  build/SMT2_EN.bin  and  SMT2_EN.xdelta
 
 Pipeline: mine dictionary -> kern font -> build exe (VWF hook + width table +
-dictionary-compressed English C/D tree) ->
+dictionary-compressed English C/D tree) -> rebuild bilingual A/B tree ->
 translate ALL name tables (demons/races/spells/items/locations/NPCs/traits/drinks) ->
 translate menu table -> translate dialogue banks -> patch bin (EDC/ECC) -> xdelta.
 
@@ -67,7 +67,9 @@ DICT_ROUND_PICKS = 8
 
 def dictionary_corpus_texts():
     parts = []
-    for author in TR.TRANS.values():
+    for message_id, author in TR.TRANS.items():
+        if message_id >> 12 not in {0,1,2,3,6,7}:
+            continue
         for part in author:
             if isinstance(part, str) and part not in TP.CTRL_NAME:
                 parts.append(part)
@@ -468,9 +470,114 @@ def _decode_traits(slpm):
     return out
 
 # ============================ 4. DIALOGUE + MENU (banks) ============================
+AB_STRUCT, AB_SYM = 0x8010130c, 0x80101978
+
+def decode_ab_block(block, slpm):
+    """Decode one byte-bounded A/B block while retaining dispatch indices."""
+    def U16(address): return struct.unpack_from("<H",slpm,foff(address))[0]
+    data_offset=struct.unpack_from("<H",block,0)[0]
+    count=(data_offset-2)//2
+    offsets=list(struct.unpack_from(f"<{count}H",block,2))
+    unique=sorted(set(offsets))
+    fill=block.find(b"\xCC"*16,data_offset+unique[-1])
+    if fill<0:
+        raise SystemExit("could not find A/B-bank fill after final stream")
+    end_for={
+        offset:(unique[i+1] if i+1<len(unique) else fill-data_offset)
+        for i,offset in enumerate(unique)
+    }
+
+    def decode_one(offset):
+        pos=data_offset+offset; end=data_offset+end_for[offset]
+        high_nibble=True; tokens=[]
+        while pos<end:
+            node=0
+            for _depth in range(64):
+                if pos>=end: return tokens
+                byte=block[pos]
+                nibble=(byte>>4) if high_nibble else (byte&0x0f)
+                high_nibble=not high_nibble
+                if high_nibble: pos+=1
+                entry=(node&0xfffe)+nibble*2
+                next_node=U16(AB_STRUCT+entry)
+                if next_node==0x7fff: return tokens
+                if next_node&0x8000:
+                    symbol=U16(AB_SYM+entry)
+                    if next_node&0x4000:
+                        tokens.append((symbol,True,next_node&0x3fff))
+                    else:
+                        tokens.append((symbol,False))
+                    break
+                node=next_node
+            else:
+                raise SystemExit("A/B Huffman path exceeds 64 levels")
+        return tokens
+
+    cache={offset:decode_one(offset) for offset in unique}
+    return [cache[offset] for offset in offsets],count
+
+def build_ab_block(messages, count, paths):
+    """Encode byte-aligned A/B fragments, interning exact duplicate streams."""
+    offsets=[]; data=bytearray(); interned={}
+    for message in messages:
+        key=tuple(message)
+        if key in interned:
+            offsets.append(interned[key]); continue
+        offsets.append(len(data)); interned[key]=len(data)
+        nibbles=[]
+        for token in message:
+            if token not in paths:
+                raise SystemExit(f"A/B tree lacks token {token!r}")
+            nibbles.extend(paths[token])
+        byte=0; high_nibble=True
+        for nibble in nibbles:
+            if high_nibble:
+                byte=(nibble&0x0f)<<4; high_nibble=False
+            else:
+                data.append(byte|(nibble&0x0f)); high_nibble=True
+        if not high_nibble: data.append(byte)
+    data_offset=2+2*count
+    out=bytearray(struct.pack("<H",data_offset))
+    out+=struct.pack(f"<{count}H",*offsets)
+    out+=data
+    return bytes(out)
+
+def apply_ab_banks(exe, packa, slpm):
+    """Rebuild Japanese bank 4 and translated bank 5 under one A/B tree."""
+    specs={4:(0x32f1000,0x7800,2432),5:(0x32f8800,0x2800,98)}
+    source=bytes(packa); decoded={}
+    for bank,(base,allocation,expected_count) in specs.items():
+        messages,count=decode_ab_block(source[base:base+allocation],slpm)
+        if count!=expected_count:
+            raise SystemExit(f"bank{bank}: expected {expected_count} entries, found {count}")
+        decoded[bank]=messages
+
+    bank5=[]
+    for index,original in enumerate(decoded[5]):
+        message_id=0x5000|index
+        bank5.append(
+            TP.ab_author_to_tokens(TR.TRANS[message_id])
+            if message_id in TR.TRANS else original
+        )
+
+    paths=BP.build_bilingual_ab_tree(exe,decoded[4]+bank5)
+    rebuilt={
+        4:build_ab_block(decoded[4],len(decoded[4]),paths),
+        5:build_ab_block(bank5,len(bank5),paths),
+    }
+    packa=bytearray(packa)
+    for bank,(base,allocation,_count) in specs.items():
+        block=rebuilt[bank]
+        print(f"  bank{bank}: {len(block)}/{allocation} bytes")
+        if len(block)>allocation:
+            raise SystemExit(f"bank{bank} OVERFLOW {len(block)}>{allocation}")
+        packa[base:base+allocation]=b"\xCC"*allocation
+        packa[base:base+len(block)]=block
+    return packa
+
 CD_BANKS = None
 def apply_banks(exe, packa, slpm, PATHS):
-    """Rebuild C/D dialogue banks with TR.TRANS (translated) + placeholders.
+    """Rebuild A/B and C/D banks with TR.TRANS plus C/D placeholders.
 
     Banks 2 and 3 remain within their original fixed archive entries: 16 sectors
     for Bank 2 and 13 sectors for Bank 3.  No PACKA entry is relocated.
@@ -488,6 +595,7 @@ def apply_banks(exe, packa, slpm, PATHS):
     dst_alloc7=BP.DICT_BASE-BANK7_CAVE
     source_packa=bytes(packa)
     packa=bytearray(packa)
+    packa=apply_ab_banks(exe,packa,slpm)
 
     # bank: (buffer, source base, source allocation, destination base, destination allocation)
     banks={
@@ -702,7 +810,7 @@ def main(argv=None):
     rdlogo0 = extract_from_bin(bind, RDLOGO_SECTOR, RDLOGO_SIZE)
     print("[2/6] kerning font...")
     font_slpm, widths = kern_font(slpm)
-    print("[3/6] building exe (VWF hook + dictionary-compressed English tree)...")
+    print("[3/6] building exe (VWF hook + dictionary-compressed C/D tree)...")
     exe = build_exe(font_slpm, widths, slpm)
     PATHS = BR.build_paths(0x80117ec4, 0x801187a4, exe)
     print("[4/6] applying name tables")

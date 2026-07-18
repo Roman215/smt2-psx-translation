@@ -1,6 +1,8 @@
-"""Production exe: kerned font, VWF hook, and dictionary-compressed C/D tree.
+"""Production exe: kerned font plus rebuilt C/D and A/B text trees.
 
-A/B (banks 4 and 5) remains untouched so Japanese negotiation still decodes.
+The C/D tree uses the mined English dictionary. The A/B tree is rebuilt from
+the untouched Japanese negotiation corpus plus authored English battle-command
+fragments, allowing bank 5 to be translated without breaking bank 4.
 Each mined dictionary entry is a control-flagged Huffman leaf (struct=0xC000|6,
 symbol=0x8540+i). The slot-6 stub calls an expansion handler, which looks up the
 full string and tail-jumps the stock append routine used by name inserts."""
@@ -8,6 +10,7 @@ import struct
 import build_en_tree as ET
 
 STRUCT=0x80117ec4; SYM=0x801187a4; STCAP=SYM-STRUCT
+AB_STRUCT=0x8010130c; AB_SYM=0x80101978; AB_STCAP=AB_SYM-AB_STRUCT
 
 # ---- Dictionary runtime layout ----------------------------------------------------
 # Lives in the tail of the rodata font-placeholder cave, AFTER bank 7's relocated
@@ -77,7 +80,9 @@ def _corpus_freqs(cidx):
     import translations as TR, translate_pipeline as TP
     import name_tables as NT, menu_table as MT
     chars=Counter(); dicts=Counter(); ctrls=Counter()
-    for author in TR.TRANS.values():
+    for message_id,author in TR.TRANS.items():
+        if message_id >> 12 not in {0,1,2,3,6,7}:
+            continue
         for part in author:
             if isinstance(part,tuple): ctrls[part[0]]+=1          # raw token
             elif part in TP.CTRL_NAME: ctrls[TP.CTRL_NAME[part][0]]+=1
@@ -162,6 +167,96 @@ def build_english_tree(exe, slpm):
             w16(STRUCT+ea,st); w16(SYM+ea,sy)
     _install_dictionary_runtime(exe)
     return codes, cidx
+
+def build_bilingual_ab_tree(exe, messages):
+    """Build the A/B tree from exact bank-4/5 tokens and return token paths.
+
+    Plain tokens are ``(symbol, False)``. A/B controls are
+    ``(0x8140, True, dispatch_index)`` because the stock tree assigns several
+    different runtime operations the same nominal space symbol.
+    """
+    import heapq
+    from collections import Counter, deque
+
+    def w16(a,v): struct.pack_into("<H",exe,_foff(a),v)
+    counts=Counter(token for message in messages for token in message)
+    if not counts:
+        raise ValueError("A/B corpus is empty")
+
+    # Reserve nibble 0 at the root as an invalid padding branch. A/B streams are
+    # individually byte-aligned, so allowing a zero pad nibble to reach a real
+    # leaf would append a spurious final glyph. Deeper nodes retain all sixteen
+    # branches so the bilingual repertoire still fits the stock table.
+    items=list(counts.items()); pad=(-(len(items)-1))%15
+    heap=[]; tree={}; nid=0
+    for token,frequency in items:
+        tree[nid]=('leaf',token)
+        heapq.heappush(heap,(float(frequency),nid)); nid+=1
+    for _ in range(pad):
+        tree[nid]=('leaf',None)
+        heapq.heappush(heap,(0.0,nid)); nid+=1
+    while len(heap)>1:
+        children=[heapq.heappop(heap) for _ in range(min(16,len(heap)))]
+        tree[nid]=('node',[child[1] for child in children])
+        heapq.heappush(heap,(sum(child[0] for child in children),nid)); nid+=1
+    root=heap[0][1]
+    if len(tree[root][1])==16:
+        root_children=tree[root][1]
+        tree[nid]=('node',root_children[:2])
+        tree[root]=('node',[nid]+root_children[2:])
+        nid+=1
+
+    codes={}
+    def walk(node,path):
+        kind,value=tree[node]
+        if kind=='leaf':
+            if value is not None: codes[value]=path
+            return
+        first_nibble=1 if node==root else 0
+        for nibble,child in enumerate(value,first_nibble): walk(child,path+[nibble])
+    walk(root,[])
+
+    offsets={}; next_offset=0; queue=deque([root])
+    while queue:
+        node=queue.popleft()
+        if tree[node][0]!='node' or node in offsets: continue
+        offsets[node]=next_offset; next_offset+=32
+        for child in tree[node][1]:
+            if tree[child][0]=='node': queue.append(child)
+    if next_offset>AB_STCAP:
+        raise SystemExit(f"A/B tree overflow: {next_offset}>{AB_STCAP}")
+
+    for offset in range(0,AB_STCAP,2):
+        w16(AB_STRUCT+offset,0x7fff)
+        w16(AB_SYM+offset,0)
+
+    def leaf_entry(token):
+        if len(token)==3:
+            symbol,is_control,index=token
+            if not is_control:
+                raise ValueError(f"invalid A/B control token: {token!r}")
+            return 0xc000|index,symbol
+        symbol,is_control=token
+        if is_control:
+            raise ValueError(f"A/B control lacks dispatch index: {token!r}")
+        return 0x8000,symbol
+
+    for node,base in offsets.items():
+        children=tree[node][1]
+        for nibble in range(16):
+            entry_offset=base+nibble*2
+            child_index=(nibble-1) if node==root else nibble
+            if child_index<0 or child_index>=len(children):
+                struct_value,symbol=0x7fff,0
+            else:
+                child=children[child_index]; kind,value=tree[child]
+                if kind=='leaf':
+                    struct_value,symbol=(0x7fff,0) if value is None else leaf_entry(value)
+                else:
+                    struct_value,symbol=offsets[child],0
+            w16(AB_STRUCT+entry_offset,struct_value)
+            w16(AB_SYM+entry_offset,symbol)
+    return codes
 
 def _install_dictionary_runtime(exe):
     """Write the dict handler, pointer table, expansion strings, and stub 6."""

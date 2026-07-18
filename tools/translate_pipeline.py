@@ -1,7 +1,7 @@
-"""SMT2 translation pipeline. Decodes all C/D banks with the original Japanese
-tree, applies English translations (control codes preserved), placeholders the
-untranslated remainder (controls only), re-encodes with the English tree, rebuilds
-every C/D block, verifies each fits its allocation, and emits a bin xdelta patch.
+"""SMT2 translation token helpers. C/D dialogue uses named two-byte controls and
+the mined English dictionary; A/B battle fragments use named dispatcher indices
+and plain character tokens. build.py owns block decoding, packing, and allocation
+checks.
 
 Translated messages are authored as lists mixing text strings and control names:
   TRANS[msgid] = ["Okamoto: Hi", 'CR', "Hawk!", 'WT','PG', ...JP-insert names..., 'ED']
@@ -14,6 +14,13 @@ import build_en_tree as ET, block_rebuild as BR, build_prod_exe as BP
 
 CTRL_NAME={n:(struct.unpack(">H",n.encode("ascii"))[0],True) for n in
   "CR WT PG ED SY SN Fe TI IT FI FO NI AG SU MN KO OT ZK ZO MG MH PP AL SE TW".split()}
+
+# Banks 4/5 use the older A/B tree. Its dynamic inserts and layout operations
+# all decode to the same nominal 0x8140 symbol, but the control-dispatch index
+# in the tree leaf distinguishes their runtime behavior. Keep those indices
+# explicit rather than flattening them into ordinary spaces.
+AB_CTRL_INDEX={f"A{i:02X}":i for i in
+  (0x0E,0x0F,0x14,0x61,0x63,0x65,0x66,0x67,0x68,0x6B,0x6E)}
 
 # Dictionary matching configured by build.py after mining the current corpus.
 # Matching is case-sensitive and greedy-longest: buckets are per first char,
@@ -46,6 +53,18 @@ def author_to_tokens(author):
         if isinstance(part,tuple): toks.append(part)               # raw token
         elif part in CTRL_NAME:   toks.append(CTRL_NAME[part])     # control name
         else:                     toks+=text_tokens(part)          # text
+    return toks
+
+def ab_author_to_tokens(author):
+    """Convert an A/B-bank author list without using the C/D dictionary."""
+    toks=[]
+    for part in author:
+        if isinstance(part,tuple):
+            toks.append(part)
+        elif part in AB_CTRL_INDEX:
+            toks.append((0x8140,True,AB_CTRL_INDEX[part]))
+        else:
+            toks.extend((ET.fullwidth(ch),False) for ch in part)
     return toks
 
 def placeholder(orig_tokens):
