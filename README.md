@@ -12,6 +12,20 @@ build tooling. It does not contain, distribute, or download game data.
   <a href="screenshots/2.png"><img src="screenshots/2.png" width="32%" alt="Translated equipment menu"></a>
 </p>
 
+## Downloads
+
+Pre-built patches are published on the
+[Releases](https://github.com/Roman215/smt2-psx-translation/releases) page.
+Each release carries two xdelta patches — one with the translated English
+opening movie and one keeping the original Japanese opening movie — plus
+`sha256sums.txt` and step-by-step patching instructions. The patches contain
+no game data; apply them to your own verified **Shin Megami Tensei II (Japan)
+(Rev 1)** BIN image with
+[Delta Patcher](https://github.com/marco-calautti/DeltaPatcher/releases) or
+xdelta3.
+
+To build from source instead, read on.
+
 ## Requirements
 
 - Python 3.10 or newer
@@ -86,11 +100,22 @@ The matching CUE can be copied or renamed to refer to `SMT2_EN.bin`. If you
 create an xdelta for distribution, it must be applied to the same verified
 source image.
 
+## Releasing
+
+Version history lives in [CHANGELOG.md](CHANGELOG.md). Maintainers cut
+releases locally with `python release.py X.Y.Z`, which builds both patch
+variants, tags the version, and uploads only the xdelta patches and checksums
+to a GitHub release — see [RELEASING.md](RELEASING.md). CI verifies on every
+push that no game data is tracked in the repository.
+
 ## Project layout
 
 - `build.py` — full reproducible build; extracts the needed executable and data
   files directly from the supplied BIN, patches them, fixes Mode 2 EDC/ECC, and
   optionally creates an xdelta patch.
+- `release.py` — release automation: builds both patch variants, stages
+  checksums and notes from `CHANGELOG.md`, and publishes a GitHub release
+  containing only distributable files.
 - `tools/translations.py` — dialogue translation source.
 - `tools/name_tables.py`, `menu_table.py`, `sys_strings.py`, and `map_names.py`
   — English UI, terminology, and location data.
