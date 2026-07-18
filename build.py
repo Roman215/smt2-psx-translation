@@ -65,6 +65,10 @@ DICT_MAX_LEN = 16
 DICT_MIN_COUNT = 3
 DICT_TOKEN_NIBBLES = 3
 DICT_ROUND_PICKS = 8
+# Mining budget for the A/B-local (negotiation) dictionary.  Deliberately a bit
+# above what the dead-space string regions hold -- BP.fit_ab_local_dictionary
+# trims the least-valuable entries to whatever provably fits this build.
+AB_DICT_BUDGET = 4608
 
 def dictionary_corpus_texts():
     # Keep mining driven by the fixed-size C/D banks. A/B text may reuse the
@@ -84,8 +88,8 @@ def dictionary_corpus_texts():
                 parts.append(part)
     return parts
 
-def select_ab_dictionary(entries):
-    """Choose shared-dictionary entries that occur in authored A/B text."""
+def ab_corpus_texts():
+    """Authored A/B (bank 4/5) text fragments, mirroring dictionary_corpus_texts."""
     texts=[]
     for message_id,author in TR.TRANS.items():
         if message_id>>12 not in {4,5}:
@@ -99,6 +103,11 @@ def select_ab_dictionary(entries):
                     texts.append(suffix)
             else:
                 texts.append(part)
+    return texts
+
+def select_ab_dictionary(entries):
+    """Choose shared-dictionary entries that occur in authored A/B text."""
+    texts=ab_corpus_texts()
     ranked=[]
     for text,_weight in entries:
         count=sum(part.count(text) for part in texts)
@@ -152,9 +161,9 @@ def dictionary_char_nibble_costs(text):
 def dictionary_runtime_cost(s):
     return 4 + 2 * len(s) + 1  # pointer + fullwidth string + NUL
 
-def mine_dictionary(budget):
-    """Return dictionary entries selected from the current translation corpus."""
-    corpus = "\x00".join(dictionary_corpus_texts())
+def mine_dictionary(budget, texts=None):
+    """Return dictionary entries selected from the given corpus (default C/D)."""
+    corpus = "\x00".join(dictionary_corpus_texts() if texts is None else texts)
     costs = dictionary_char_nibble_costs(corpus)
     chosen = []
     spent = 0
@@ -746,11 +755,71 @@ def build_ab_block(messages, count, paths):
     out+=data
     return bytes(out)
 
-def apply_ab_banks(exe, packa, slpm):
-    """Rebuild English bank 4/5, marking unfinished bank-4 fragments explicitly."""
-    specs={4:(0x32f1000,0x7800,2432),5:(0x32f8800,0x2800,98)}
-    source=bytes(packa); decoded={}
+# Bank 4 needs more than its stock 15 sectors for full English negotiation
+# text.  One extra sector brings it to 16 -- the proven ceiling: banks 0-5 all
+# load to the fixed buffer 0x801bbe28 and live engine data begins exactly 16
+# sectors later at 0x801c3e28 (stock bank 2 already reads 16 sectors).  Every
+# PACKA file after bank 4 shifts by this amount; make_patch grows the ISO
+# extent (PACKA.BIN is the last file on disc, followed by free sectors).
+AB4_EXTRA_SECTORS = 1
+FILE_TABLE = 0x800e891c            # u16 PACKA sector per file id
+FILE_TABLE_ENTRIES = 0x862         # ids 0x000-0x860 + end boundary at 0x861
+
+def _shift_file_table(exe, first_sector, extra_sectors):
+    """Move every file located at/after first_sector by extra_sectors."""
+    previous=0
+    for fid in range(FILE_TABLE_ENTRIES):
+        off=foff(FILE_TABLE)+2*fid
+        value=struct.unpack_from("<H",exe,off)[0]
+        if value<previous:
+            raise SystemExit(f"PACKA file table not monotonic at id {fid:#x}")
+        previous=value
+        if value>=first_sector:
+            struct.pack_into("<H",exe,off,value+extra_sectors)
+
+def verify_ab_banks(exe, packa, specs, authored):
+    """Round-trip the rebuilt A/B blocks against authored intent.
+
+    Decodes each block with the English tree now in the exe (segment ends are
+    offset-bounded, so interned duplicates decode through shared streams) and
+    checks the installed dictionary runtime strings byte-for-byte.
+    """
     for bank,(base,allocation,expected_count) in specs.items():
+        # Pad the fill probe so a block that ends flush with its allocation
+        # still terminates the final stream.
+        block=bytes(packa[base:base+allocation])+b"\x00"*16
+        messages,count=decode_ab_block(block,exe)
+        if count!=expected_count:
+            raise SystemExit(f"bank{bank} verify: {count} entries != {expected_count}")
+        for index,(got,want) in enumerate(zip(messages,authored[bank])):
+            if got!=want:
+                raise SystemExit(
+                    f"bank{bank} msg {index}: decode mismatch\n  got {got!r}\n  want {want!r}"
+                )
+    BP.verify_ab_runtime(exe)
+
+def apply_ab_banks(exe, packa, slpm):
+    """Rebuild English bank 4/5, growing bank 4 by AB4_EXTRA_SECTORS.
+
+    The stock file table places bank 4 in sectors 0x65e2..0x65f1 and bank 5 in
+    the single sector 0x65f1..0x65f2.  The four entries following bank 5 are
+    unrelated live files and must not be treated as bank-5 padding.  Sources
+    decode from the pristine PACKA at stock offsets; destinations use the
+    shifted layout, and the exe's file table is rewritten to match.
+    """
+    file_bounds=struct.unpack_from("<3H",slpm,0xda17e)
+    expected_bounds=(0x65e2,0x65f1,0x65f2)
+    if file_bounds!=expected_bounds:
+        raise SystemExit(
+            f"unexpected A/B bank file boundaries: {file_bounds!r}"
+        )
+    b4_start,b5_start,b5_end=file_bounds
+    src_specs={
+        4:(b4_start*2048,(b5_start-b4_start)*2048,2432),
+        5:(b5_start*2048,(b5_end-b5_start)*2048,98),
+    }
+    source=bytes(packa); decoded={}
+    for bank,(base,allocation,expected_count) in src_specs.items():
         messages,count=decode_ab_block(source[base:base+allocation],slpm)
         if count!=expected_count:
             raise SystemExit(f"bank{bank}: expected {expected_count} entries, found {count}")
@@ -774,26 +843,62 @@ def apply_ab_banks(exe, packa, slpm):
             authored[bank].append(message)
 
     paths=BP.build_ab_tree(exe,authored[4]+authored[5])
+    BP.install_ab_runtime(exe)
     rebuilt={
         bank:build_ab_block(authored[bank],len(authored[bank]),paths)
         for bank in (4,5)
     }
+    shift=AB4_EXTRA_SECTORS*2048
     packa=bytearray(packa)
-    for bank,(base,allocation,_count) in specs.items():
+    packa[b5_start*2048:b5_start*2048]=b"\x00"*shift
+    _shift_file_table(exe,b5_start,AB4_EXTRA_SECTORS)
+    dst_specs={
+        4:(b4_start*2048,(b5_start-b4_start)*2048+shift,2432),
+        5:(b5_start*2048+shift,(b5_end-b5_start)*2048,98),
+    }
+    for bank,(base,allocation,_count) in dst_specs.items():
         block=rebuilt[bank]
         print(f"  bank{bank}: {len(block)}/{allocation} bytes")
         if len(block)>allocation:
             raise SystemExit(f"bank{bank} OVERFLOW {len(block)}>{allocation}")
         packa[base:base+allocation]=b"\x00"*allocation
         packa[base:base+len(block)]=block
-    return packa
+
+    # Capacity projection: placeholders drop out at 100%, so scale the bytes of
+    # unique translated streams by the JP unique-stream token ratio.  Unique
+    # streams (not raw entries) are what interning actually stores.
+    translated_ids={mid&0xfff for mid in TR.TRANS if mid>>12==4}
+    unique_jp={}
+    for index,message in enumerate(decoded[4]):
+        unique_jp.setdefault(tuple(message),[]).append(index)
+    jp_translated=jp_total=0
+    for key,indices in unique_jp.items():
+        jp_total+=len(key)
+        if any(i in translated_ids for i in indices):
+            jp_translated+=len(key)
+    seen=set(); translated_bytes=0
+    for index,message in enumerate(authored[4]):
+        key=tuple(message)
+        if key in seen: continue
+        seen.add(key)
+        if index in translated_ids:
+            translated_bytes+=(sum(len(paths[t]) for t in message)+1)//2
+    if jp_translated:
+        alloc4=dst_specs[4][1]
+        projected=2+2*len(authored[4])+translated_bytes*jp_total/jp_translated
+        print(
+            f"  bank4 projection at full translation: ~{projected:,.0f}/{alloc4} bytes "
+            f"({len(translated_ids)}/{len(authored[4])} entries translated)"
+        )
+    return packa,dst_specs,authored
 
 CD_BANKS = None
 def apply_banks(exe, packa, slpm, PATHS):
     """Rebuild A/B and C/D banks with TR.TRANS plus C/D placeholders.
 
-    Banks 2 and 3 remain within their original fixed archive entries: 16 sectors
-    for Bank 2 and 13 sectors for Bank 3.  No PACKA entry is relocated.
+    Bank allocations are unchanged except bank 4 (+AB4_EXTRA_SECTORS), so every
+    PACKA bank after it sits AB4_EXTRA_SECTORS later in the rebuilt archive.
+    Sources always decode from the pristine PACKA at stock offsets.
     """
     ED=(0x4544,True)
     def U16(a): return struct.unpack_from("<H", exe, foff(a))[0]
@@ -803,19 +908,21 @@ def apply_banks(exe, packa, slpm, PATHS):
     src_alloc6=BANK7_JP_BASE-BANK6_BASE            # 4948: stock bank 6 region
     src_alloc7=0x80117cc8-BANK7_JP_BASE            # 3484: bounds the decode only
     dst_alloc6=BANK6_LIMIT-BANK6_BASE              # 5632: bank 6 owns the whole region
-    # The dictionary handler + strings occupy the cave tail from BP.DICT_BASE,
-    # so bank 7's allocation ends there.
-    dst_alloc7=BP.DICT_BASE-BANK7_CAVE
+    # The cave tail holds the dictionary handler + strings from BP.DICT_BASE
+    # and the A/B continuation handler in the 64 bytes before it, so bank 7's
+    # allocation ends at BP.AB4_HANDLER.
+    dst_alloc7=BP.AB4_HANDLER-BANK7_CAVE
     source_packa=bytes(packa)
     packa=bytearray(packa)
-    packa=apply_ab_banks(exe,packa,slpm)
+    packa,ab_specs,ab_authored=apply_ab_banks(exe,packa,slpm)
 
     # bank: (buffer, source base, source allocation, destination base, destination allocation)
+    S=AB4_EXTRA_SECTORS*2048           # PACKA tail shift from the bank-4 growth
     banks={
-        0:("packa",0x32fb000,15*2048,0x32fb000,15*2048),
-        1:("packa",0x3302800, 2*2048,0x3302800, 2*2048),
-        2:("packa",0x3303800,16*2048,0x3303800,16*2048),
-        3:("packa",0x330b800,13*2048,0x330b800,13*2048),
+        0:("packa",0x32fb000,15*2048,0x32fb000+S,15*2048),
+        1:("packa",0x3302800, 2*2048,0x3302800+S, 2*2048),
+        2:("packa",0x3303800,16*2048,0x3303800+S,16*2048),
+        3:("packa",0x330b800,13*2048,0x330b800+S,13*2048),
         6:("exe",BANK6_BASE,src_alloc6,BANK6_BASE,dst_alloc6),
         7:("exe",BANK7_JP_BASE,src_alloc7,BANK7_CAVE,dst_alloc7),
     }
@@ -878,6 +985,10 @@ def apply_banks(exe, packa, slpm, PATHS):
     if (struct.unpack_from("<H",slpm,0xda190)[0] != 0x6617 or
         struct.unpack_from("<H",slpm,0xda192)[0] != 0x6624):
         raise SystemExit("unexpected PACKA Bank 3 boundaries")
+    # Validate the FINAL exe/PACKA state.  This must run after every bank is
+    # written: bank 6 legitimately grows into the stock bank-7 block, so an
+    # A/B runtime placed anywhere unsafe would only be clobbered by now.
+    verify_ab_banks(exe,packa,ab_specs,ab_authored)
     return packa
 
 # ============================ 5. PATCH + XDELTA ============================
@@ -1032,17 +1143,22 @@ def main(argv=None):
         "--skip-opening", action="store_true", help="leave the Japanese opening movie unchanged"
     )
     args = parser.parse_args(argv)
-    print("[1/7] mining compression dictionary...")
+    print("[1/7] mining compression dictionaries...")
     dictionary, dictionary_bytes = mine_dictionary(BP.DICT_RUNTIME_BUDGET)
     BP.configure_dictionary(dictionary)
     TP.configure_dictionary(dictionary, BP.DICT_CODE_BASE)
-    TP.configure_ab_dictionary(select_ab_dictionary(dictionary))
     estimated_nibbles = sum(weight for _text, weight in dictionary)
     print(
         f"  dictionary: {len(dictionary)} entries, "
         f"{dictionary_bytes}/{BP.DICT_RUNTIME_BUDGET} bytes, "
         f"~{estimated_nibbles / 2 / 1024:.1f} KB saved"
     )
+    # A/B-local dictionary: mined from the negotiation/battle corpus.  Entries
+    # already in the shared dictionary compress through their shared codes.
+    ab_candidates, _ab_bytes = mine_dictionary(AB_DICT_BUDGET, ab_corpus_texts())
+    cd_strings = {text for text, _weight in dictionary}
+    ab_candidates = [e for e in ab_candidates if e[0] not in cd_strings]
+    print(f"  A/B dictionary: {len(ab_candidates)} candidate entries")
     input_bin = find_input_bin(args.input)
     bind = input_bin.read_bytes()
     
@@ -1082,6 +1198,20 @@ def main(argv=None):
     print("[4/7] building exe (VWF hook + dictionary-compressed C/D tree)...")
     exe = build_exe(font_slpm, widths, widths10, slpm)
     PATHS = BR.build_paths(0x80117ec4, 0x801187a4, exe)
+    # The C/D tree extent is now known, so the A/B-local dictionary can be
+    # trimmed to the dead space that actually exists in this build and the
+    # A/B tokenizer configured before apply_banks authors bank 4/5.
+    ab_shared = select_ab_dictionary(dictionary)
+    ab_local = BP.fit_ab_local_dictionary(ab_candidates, len(ab_shared))
+    BP.configure_ab_local_dictionary(ab_local)
+    TP.configure_ab_dictionary(
+        ab_shared, ab_local, BP.DICT_CODE_BASE + len(dictionary)
+    )
+    ab_string_bytes = sum(2 * len(text) + 1 for text, _weight in ab_local)
+    print(
+        f"  A/B dictionary: {len(ab_local)} entries fit "
+        f"({ab_string_bytes} string bytes in dead exe space)"
+    )
     print("[5/7] applying name tables")
     apply_name_tables(exe, slpm, PATHS)
     cmdinit = bytearray(cmdinit0)
