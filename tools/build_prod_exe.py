@@ -38,6 +38,15 @@ EPILOGUE  = 0x80059044                 # stock dispatch epilogue
 DECODED_SYM = 0x801d15de               # decoder's just-decoded symbol global
 STOCK6    = 0x80059ce4                 # stock slot-6 handler = event-script choice-menu op
 
+# The stock C/D tree has two control leaves with the nominal symbol 0x5355
+# ("SU").  Dispatch 113 prints the primary numeric slot at 0x801fd534, while
+# dispatch 118 prints the secondary enemy-group slot at 0x801fd590.  A mapping
+# keyed only by symbol necessarily collapses them.  Give the latter a synthetic
+# two-byte symbol ("S2") in the rebuilt English tree; the handler ignores the
+# decoded symbol, and translate_pipeline exposes the same internal alias.
+SECONDARY_NUMBER_CODE = 0x5332
+SECONDARY_NUMBER_INDEX = 118
+
 # ---- A/B-local dictionary runtime -------------------------------------------------
 # Negotiation/battle text (banks 4/5) carries a second mined dictionary. Codes
 # extend the shared namespace: [0x8540, 0x8540+NCD) are the C/D entries (u32
@@ -242,16 +251,28 @@ def _foff(a): return (a-0x80010000)+0x800
 
 def control_index_map(slpm):
     def oU16(a): return struct.unpack_from("<H",slpm,_foff(a))[0]
-    cidx={}
+    cidx={}; indices_by_symbol={}
     def dfs(n,d):
         if d>40: return
         for nib in range(16):
             ea=(n&0xFFFE)+nib*2; nx=oU16(STRUCT+ea)
             if nx==0x7fff: continue
             if nx&0x8000:
-                if nx&0x4000: cidx.setdefault(oU16(SYM+ea),nx&0x3fff)
+                if nx&0x4000:
+                    symbol=oU16(SYM+ea); index=nx&0x3fff
+                    cidx.setdefault(symbol,index)
+                    indices_by_symbol.setdefault(symbol,set()).add(index)
             elif nx!=n: dfs(nx,d+1)
     dfs(0,0)
+    if SECONDARY_NUMBER_CODE in cidx:
+        raise SystemExit("synthetic S2 control collides with a stock C/D symbol")
+    if indices_by_symbol.get(0x5355) != {113,SECONDARY_NUMBER_INDEX}:
+        raise SystemExit("unexpected stock SU control dispatchers")
+    # Index 118 is the stock formatter at 0x80062470.  Verify this revision's
+    # jump-table entry before making it reachable under the synthetic alias.
+    if struct.unpack_from("<I",slpm,_foff(JT+SECONDARY_NUMBER_INDEX*4))[0] != 0x80058adc:
+        raise SystemExit("unexpected secondary-number dispatch entry")
+    cidx[SECONDARY_NUMBER_CODE]=SECONDARY_NUMBER_INDEX
     return cidx
 
 def _corpus_freqs(cidx):
