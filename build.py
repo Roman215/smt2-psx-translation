@@ -1206,8 +1206,13 @@ def build_opening_movie(
     requested_ffmpeg=None,
     requested_psxavenc=None,
     skip=False,
+    required=False,
 ):
-    """Best-effort opening translation; return None to keep the source movie."""
+    """Best-effort opening translation; return None to keep the source movie.
+
+    With required=True any failure aborts the build instead: release builds
+    must never silently ship the Japanese movie in the English-movie patch.
+    """
 
     if skip:
         print("[3/7] leaving OPENING.STR unchanged (--skip-opening)")
@@ -1248,6 +1253,12 @@ def build_opening_movie(
         )
         return opening
     except Exception as exc:
+        if required:
+            raise SystemExit(
+                f"ERROR: the opening movie could not be translated: {exc}\n"
+                "--require-opening forbids falling back to the Japanese movie; "
+                "fix FFmpeg/psxavenc availability or drop the flag."
+            ) from exc
         print(f"  WARNING: the opening movie was not translated: {exc}")
         print("  WARNING: continuing with the original Japanese movie.")
         return None
@@ -1270,8 +1281,15 @@ def main(argv=None):
         metavar="EXE",
         help="optional psxavenc executable used to rebuild the opening movie",
     )
-    parser.add_argument(
+    movie_mode = parser.add_mutually_exclusive_group()
+    movie_mode.add_argument(
         "--skip-opening", action="store_true", help="leave the Japanese opening movie unchanged"
+    )
+    movie_mode.add_argument(
+        "--require-opening",
+        action="store_true",
+        help="fail the build if the English opening movie cannot be generated, "
+        "instead of falling back to the Japanese movie",
     )
     parser.add_argument(
         "--output-dir",
@@ -1334,6 +1352,7 @@ def main(argv=None):
         requested_ffmpeg=args.ffmpeg,
         requested_psxavenc=args.psxavenc,
         skip=args.skip_opening,
+        required=args.require_opening,
     )
     print("[4/7] building exe (VWF hook + dictionary-compressed C/D tree)...")
     exe = build_exe(font_slpm, widths, widths10, slpm)

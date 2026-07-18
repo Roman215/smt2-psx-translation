@@ -174,8 +174,9 @@ def build_variant(staging, name, english_opening, input_bin):
     """Run one full build; return the resulting xdelta path."""
     variant_dir = staging / name
     command = [sys.executable, "build.py", "--xdelta", "--output-dir", str(variant_dir)]
-    if not english_opening:
-        command.append("--skip-opening")
+    # --require-opening aborts the build at the movie step, so a failed movie
+    # can never fall back to the Japanese opening in the English-movie patch.
+    command.append("--require-opening" if english_opening else "--skip-opening")
     if input_bin is not None:
         command += ["--input", str(input_bin)]
     print(f"\n=== building variant `{name}` ===")
@@ -183,6 +184,7 @@ def build_variant(staging, name, english_opening, input_bin):
     if returncode != 0:
         fail(f"build for variant `{name}` failed (exit {returncode})")
     if english_opening and OPENING_FAILURE_MARKER in output:
+        # Backstop only: --require-opening should already have failed the build.
         fail(
             "the English-opening build fell back to the Japanese movie "
             "(see WARNING above). Releases must not silently ship the "
