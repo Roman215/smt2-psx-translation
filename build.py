@@ -5,7 +5,7 @@ Run from the project root:  python build.py
 Outputs:  build/SMT2_EN.bin  and  SMT2_EN.xdelta
 
 Pipeline: mine dictionary -> kern font -> build exe (VWF hook + width table +
-dictionary-compressed English C/D tree) -> rebuild bilingual A/B tree ->
+dictionary-compressed English C/D tree) -> rebuild English A/B tree ->
 translate ALL name tables (demons/races/spells/items/locations/NPCs/traits/drinks) ->
 translate menu table -> translate dialogue banks -> patch bin (EDC/ECC) -> xdelta.
 
@@ -67,6 +67,8 @@ DICT_TOKEN_NIBBLES = 3
 DICT_ROUND_PICKS = 8
 
 def dictionary_corpus_texts():
+    # Keep mining driven by the fixed-size C/D banks. A/B text may reuse the
+    # resulting entries, but must not displace entries that keep bank 0 viable.
     parts = []
     for message_id, author in TR.TRANS.items():
         if message_id >> 12 not in {0,1,2,3,6,7}:
@@ -75,6 +77,24 @@ def dictionary_corpus_texts():
             if isinstance(part, str) and part not in TP.CTRL_NAME:
                 parts.append(part)
     return parts
+
+def select_ab_dictionary(entries):
+    """Choose shared-dictionary entries that occur in authored A/B text."""
+    texts=[]
+    for message_id,author in TR.TRANS.items():
+        if message_id>>12 not in {4,5}:
+            continue
+        texts.extend(
+            part for part in author
+            if isinstance(part,str) and part not in TP.AB_CTRL_INDEX
+        )
+    ranked=[]
+    for text,_weight in entries:
+        count=sum(part.count(text) for part in texts)
+        if count:
+            ranked.append((count*(len(text)-1),text))
+    ranked.sort(reverse=True)
+    return [text for _score,text in ranked]
 
 def dictionary_encodable(s):
     for ch in s:
@@ -631,7 +651,7 @@ def build_ab_block(messages, count, paths):
     return bytes(out)
 
 def apply_ab_banks(exe, packa, slpm):
-    """Rebuild Japanese bank 4 and translated bank 5 under one A/B tree."""
+    """Rebuild English bank 4/5, marking unfinished bank-4 fragments explicitly."""
     specs={4:(0x32f1000,0x7800,2432),5:(0x32f8800,0x2800,98)}
     source=bytes(packa); decoded={}
     for bank,(base,allocation,expected_count) in specs.items():
@@ -640,18 +660,27 @@ def apply_ab_banks(exe, packa, slpm):
             raise SystemExit(f"bank{bank}: expected {expected_count} entries, found {count}")
         decoded[bank]=messages
 
-    bank5=[]
-    for index,original in enumerate(decoded[5]):
-        message_id=0x5000|index
-        bank5.append(
-            TP.ab_author_to_tokens(TR.TRANS[message_id])
-            if message_id in TR.TRANS else original
-        )
+    authored={}
+    for bank in (4,5):
+        authored[bank]=[]
+        for index,original in enumerate(decoded[bank]):
+            message_id=(bank<<12)|index
+            if message_id in TR.TRANS:
+                message=TP.ab_author_to_tokens(TR.TRANS[message_id])
+            elif bank==4:
+                # Japanese fallback is intentionally disabled while bank 4 is
+                # being localized. Retain every dispatcher operation in source
+                # order so unfinished paths remain structurally testable.
+                controls=[token for token in original if len(token)==3]
+                message=TP.ab_author_to_tokens(["UNTRANSLATED"])+controls
+            else:
+                message=original
+            authored[bank].append(message)
 
-    paths=BP.build_bilingual_ab_tree(exe,decoded[4]+bank5)
+    paths=BP.build_ab_tree(exe,authored[4]+authored[5])
     rebuilt={
-        4:build_ab_block(decoded[4],len(decoded[4]),paths),
-        5:build_ab_block(bank5,len(bank5),paths),
+        bank:build_ab_block(authored[bank],len(authored[bank]),paths)
+        for bank in (4,5)
     }
     packa=bytearray(packa)
     for bank,(base,allocation,_count) in specs.items():
@@ -911,6 +940,7 @@ def main(argv=None):
     dictionary, dictionary_bytes = mine_dictionary(BP.DICT_RUNTIME_BUDGET)
     BP.configure_dictionary(dictionary)
     TP.configure_dictionary(dictionary, BP.DICT_CODE_BASE)
+    TP.configure_ab_dictionary(select_ab_dictionary(dictionary))
     estimated_nibbles = sum(weight for _text, weight in dictionary)
     print(
         f"  dictionary: {len(dictionary)} entries, "

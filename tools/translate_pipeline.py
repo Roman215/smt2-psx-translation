@@ -20,7 +20,8 @@ CTRL_NAME={n:(struct.unpack(">H",n.encode("ascii"))[0],True) for n in
 # in the tree leaf distinguishes their runtime behavior. Keep those indices
 # explicit rather than flattening them into ordinary spaces.
 AB_CTRL_INDEX={f"A{i:02X}":i for i in
-  (0x0E,0x0F,0x14,0x61,0x63,0x65,0x66,0x67,0x68,0x6B,0x6E)}
+  (0x0E,0x0F,0x14,0x61,0x62,0x63,0x64,0x65,0x66,0x67,0x68,0x69,
+   0x6B,0x6E,0x6F)}
 
 # Dictionary matching configured by build.py after mining the current corpus.
 # Matching is case-sensitive and greedy-longest: buckets are per first char,
@@ -28,12 +29,24 @@ AB_CTRL_INDEX={f"A{i:02X}":i for i in
 # their character tokens directly.
 _DCODE={}
 _DBYFIRST={}
+_AB_DCODE={}
+_AB_DBYFIRST={}
 
 def configure_dictionary(entries, code_base):
-    _DCODE.clear(); _DBYFIRST.clear()
+    _DCODE.clear(); _DBYFIRST.clear(); _AB_DCODE.clear(); _AB_DBYFIRST.clear()
     _DCODE.update({s:code_base+i for i,(s,_weight) in enumerate(entries)})
     for s in sorted(_DCODE, key=len, reverse=True):
         _DBYFIRST.setdefault(s[0], []).append(s)
+
+def configure_ab_dictionary(strings):
+    """Enable a capped subset of the shared dictionary for authored A/B text."""
+    _AB_DCODE.clear(); _AB_DBYFIRST.clear()
+    missing=[s for s in strings if s not in _DCODE]
+    if missing:
+        raise ValueError(f"A/B dictionary entries were not configured: {missing!r}")
+    _AB_DCODE.update({s:_DCODE[s] for s in strings})
+    for s in sorted(_AB_DCODE, key=len, reverse=True):
+        _AB_DBYFIRST.setdefault(s[0], []).append(s)
 
 def text_tokens(s):
     out=[]; i=0
@@ -56,7 +69,7 @@ def author_to_tokens(author):
     return toks
 
 def ab_author_to_tokens(author):
-    """Convert an A/B-bank author list without using the C/D dictionary."""
+    """Convert A/B author text, including the configured shared-dictionary subset."""
     toks=[]
     for part in author:
         if isinstance(part,tuple):
@@ -64,7 +77,17 @@ def ab_author_to_tokens(author):
         elif part in AB_CTRL_INDEX:
             toks.append((0x8140,True,AB_CTRL_INDEX[part]))
         else:
-            toks.extend((ET.fullwidth(ch),False) for ch in part)
+            i=0
+            while i<len(part):
+                for cand in _AB_DBYFIRST.get(part[i],()):
+                    if part.startswith(cand,i):
+                        toks.append((_AB_DCODE[cand],True,BP.DICT_JT_INDEX))
+                        i+=len(cand)
+                        break
+                else:
+                    try: toks.append((ET.fullwidth(part[i]),False))
+                    except KeyError: toks.append((ET.fullwidth(' '),False))
+                    i+=1
     return toks
 
 def placeholder(orig_tokens):
