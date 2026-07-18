@@ -71,6 +71,53 @@ def apply_name_entry(exe):
     return len(table)
 
 
+# ---------------- END button / scroll range ----------------
+# The English layout only fills grid rows 0-5, so the END button moves from
+# absolute row 15 up to the Z/z row (5) and the scroll range shrinks from
+# 0..12 to 0..2 (4 visible rows; scroll 2 shows rows 2-5).  Every constant
+# below was found by disassembling the name-entry module 0x8003e600-0x8003f540
+# and checking each scroll-variable (0x801cd994) and row-15 reference:
+#  - page-down (R1) gate/overflow/clamp, down-arrow gate: 0xc/0xd -> 2/3
+#  - END-row checks (right-move skip, left-move skip, col>=10 snap-to-11,
+#    END sprite draw, confirm-on-END): row 0xf -> 5
+#  - jump-to-END (name-full auto jump + dedicated button): scroll 0xc -> 2
+#  - down-arrow indicator hidden when scroll+4 == 16 -> 6
+#  - scrollbar slider Y = 0xa4 + (scroll*0x2f00)>>12 (~35 px over 12 steps);
+#    rescaled to (scroll*0x8c00)>>11 so 2 steps still sweep the same track
+#    (imm no longer fits addiu's signed range, hence the switch to ori).
+END_ROW_PATCHES = [
+    # (RAM address, stock word, patched word)
+    (0x8003ECB4, 0x2862000C, 0x28620002),  # slti v0,v1,0xc   -> 2   page-down gate
+    (0x8003ECC4, 0x2842000D, 0x28420003),  # slti v0,v0,0xd   -> 3   page-down overflow
+    (0x8003ECCC, 0x2402000C, 0x24020002),  # addiu v0,zero,0xc-> 2   page-down clamp
+    (0x8003ED18, 0x2862000C, 0x28620002),  # slti v0,v1,0xc   -> 2   down-arrow gate
+    (0x8003ED5C, 0x2402000F, 0x24020005),  # addiu v0,zero,0xf-> 5   right-move END row
+    (0x8003EDCC, 0x2402000F, 0x24020005),  # addiu v0,zero,0xf-> 5   left-move END row
+    (0x8003EE24, 0x2402000F, 0x24020005),  # addiu v0,zero,0xf-> 5   END-row col snap
+    (0x8003E9E0, 0x2402000F, 0x24020005),  # addiu v0,zero,0xf-> 5   END sprite draw
+    (0x8003F19C, 0x2402000F, 0x24020005),  # addiu v0,zero,0xf-> 5   confirm on END
+    (0x8003F078, 0x2402000C, 0x24020002),  # addiu v0,zero,0xc-> 2   name-full auto jump
+    (0x8003F260, 0x2402000C, 0x24020002),  # addiu v0,zero,0xc-> 2   jump-to-END button
+    (0x8003F368, 0x24030010, 0x24030006),  # addiu v1,zero,0x10->6   hide down arrow
+    (0x8003F490, 0x24022F00, 0x34028C00),  # addiu v0,zero,0x2f00 -> ori v0,zero,0x8c00
+    (0x8003F4A8, 0x00032900, 0x00032940),  # sll a1,v1,4 -> sll a1,v1,5
+]
+
+
+def apply_end_button(exe):
+    """Move END to the Z/z row and cap scrolling at the last content row."""
+    for address, stock, patched in END_ROW_PATCHES:
+        off = address - PSX_EXE_LOAD + PSX_EXE_HEADER
+        current = struct.unpack_from("<I", exe, off)[0]
+        if current != stock:
+            raise ValueError(
+                f"END-button patch at 0x{address:08x}: expected 0x{stock:08x}, "
+                f"found 0x{current:08x}"
+            )
+        struct.pack_into("<I", exe, off, patched)
+    return len(END_ROW_PATCHES)
+
+
 # ---------------- grid texture (PACKA atlas) ----------------
 
 ATLAS_PACKA_OFF = 0x3237FF1
