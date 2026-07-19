@@ -13,6 +13,47 @@ your own verified source image.
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-07-18
+
+Thank you to arciks1192-svg who tried the first public release and reported what
+they found. This maintenance release focuses on missing interface text,
+cleaner early-game dialogue, and several bugs uncovered through player
+feedback.
+
+### Added
+
+- Translated previously missed text stored in separate game overlays,
+  including Automap marker instructions and prompts, casino demon-selection
+  text, the bonus viewer's race and demon lists, and Rag's Earthies label
+  ([#4](https://github.com/Roman215/smt2-psx-translation/issues/4)).
+- Translated all 115 demon-negotiation choice labels, including responses such
+  as "Friendly" and "Intimidating."
+
+### Changed
+
+- Reformatted Virtual Battler level choices to clearly separate each level
+  from its Macca cost and display the Macca symbol
+  ([#2](https://github.com/Roman215/smt2-psx-translation/issues/2)).
+- Reworked STEVEN's early Virtual Battler dialogue to sound more natural and
+  to clarify what the Demon Summoning Program is meant to do
+  ([#3](https://github.com/Roman215/smt2-psx-translation/issues/3)).
+- Polished several other early-game lines, including the shopkeepers who
+  refuse service because of Okamoto's debts and the Virtual Battler
+  attendant's farewell.
+- Reworded item-use target prompts as the more natural "Use it on whom?"
+
+### Fixed
+
+- Corrected victory messages that could display the wrong number of defeated
+  enemies, especially for the second enemy group
+  ([#1](https://github.com/Roman215/smt2-psx-translation/issues/1)).
+- Fixed demon negotiation dialogue displaying corrupted text, restored its
+  choice menus, and rebuilt the negotiation text handling so dictionary
+  compression no longer conflicts with the game's choice command
+  ([#5](https://github.com/Roman215/smt2-psx-translation/issues/5)).
+- Fixed healing items displaying corrupted text when asking which party member
+  should receive the item.
+
 ## [0.1.0] - 2026-07-18
 
 First public release.
@@ -35,5 +76,6 @@ First public release.
 - Reproducible build (`build.py`) that patches a verified Japan Rev 1 image
   and emits distributable xdelta patches.
 
-[Unreleased]: https://github.com/Roman215/smt2-psx-translation/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/Roman215/smt2-psx-translation/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/Roman215/smt2-psx-translation/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/Roman215/smt2-psx-translation/releases/tag/v0.1.0
