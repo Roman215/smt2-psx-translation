@@ -664,6 +664,41 @@ def apply_name_tables(exe, slpm, PATHS):
     # traits: split OT(0x801034da)/DATA(0x801036da), 256 entries, dedup via TRAITS_MAP
     traits = _decode_traits(slpm)
     NT.rebuild_split(exe, 0x801034da, 0x801036da, traits, 0x801043f8, PATHS)
+    _patch_bar_drink_menu(exe)
+
+def _patch_bar_drink_menu(exe):
+    """Keep English drink names and prices inside the Bar's row formatter.
+
+    The stock routine resolves each drink name twice and appends every result
+    to one 256-byte name scratch buffer.  Six longer English names plus their
+    price strings exhaust that buffer: the second ``Speed Cocktail`` decode
+    overruns it, then corrupts the first glyph of ``Miracle Tonic``.  Measure
+    the name already copied into the row instead, resetting the scratch buffer
+    before resolving the price.  Widen the padded name field from 14 to 16
+    fullwidth characters so the longest label still leaves a visible gap
+    before the Macca symbol.  A row is 48 bytes, so the wider 32-byte field,
+    symbol, three-digit price, and terminator remain within its allocation.
+    """
+    if max(map(len,NT.DRINKS))>16:
+        raise SystemExit("Bar drink name exceeds the 16-character menu field")
+
+    # address: (stock word, English replacement)
+    patches={
+        0x8005f1a8:(0x96050000,0x00000000),  # remove redundant drink-index load
+        0x8005f1ac:(0x0c01445d,0x0c014450),  # second name lookup -> reset scratch
+        0x8005f1b0:(0x2404000e,0x00000000),  # reset delay slot
+        0x8005f1b8:(0x00402021,0x02342021),  # strlen(row) instead of strlen(v0)
+        0x8005f1c0:(0x2ce2001c,0x2ce20020),  # 28-byte field -> 32 bytes
+        0x8005f1fc:(0x2ce2001c,0x2ce20020),
+    }
+    for address,(stock,replacement) in patches.items():
+        offset=foff(address)
+        found=struct.unpack_from("<I",exe,offset)[0]
+        if found!=stock:
+            raise SystemExit(
+                f"Bar drink formatter {address:#x}: {found:#010x} != {stock:#010x}"
+            )
+        struct.pack_into("<I",exe,offset,replacement)
 
 def _decode_traits(slpm):
     """Decode the 256 JP trait entries and map each to English via NT.TRAITS_MAP."""
