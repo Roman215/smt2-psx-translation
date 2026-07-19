@@ -13,6 +13,15 @@ your own verified source image.
 
 ## [Unreleased]
 
+### Fixed
+
+- Translated the demon race labels shown in the upper-left corner of demon
+  status screens.
+- Fixed garbled result messages when summoning, returning, or dismissing demons
+  through the COMP.
+- Shortened spell and skill descriptions that could reach or overflow the
+  right edge of their description box.
+
 ## [0.1.2] - 2026-07-19
 
 This hotfix release addresses two issues found shortly after 0.1.1.

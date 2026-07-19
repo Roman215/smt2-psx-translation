@@ -648,6 +648,98 @@ def _install_sys_printer(exe, w32):
     w32(0x800482a4, J(PR)); w32(0x800482a8, NOP)
 
 # ============================ 3. NAME TABLES ============================
+_COMPACT_RACE_POOL_START = 0x80011f9c
+_COMPACT_RACE_POOL_END = 0x80012128
+_COMPACT_RACE_PTR_TABLES = (0x800f77b0, 0x800f7860)
+SPELL_DESCRIPTION_START = 160
+SPELL_DESCRIPTION_MAX_PIXELS = 124
+_COMPACT_RACE_PRIMARY_PTRS = (
+    0x800120f8, 0x800120f0, 0x800120e8, 0x800120e0, 0x800120d8, 0x800120d0,
+    0x800120c8, 0x800120c0, 0x800120b8, 0x800120b0, 0x800120a8, 0x800120a0,
+    0x80012098, 0x80012090, 0x80012088, 0x8001207c, 0x80012074, 0x8001206c,
+    0x80012064, 0x8001205c, 0x80012054, 0x8001204c, 0x80012040, 0x80012038,
+    0x80012030, 0x80012028, 0x8001201c, 0x80012014, 0x8001200c, 0x80012004,
+    0x80011ff8, 0x80011ff0, 0x80011fe8, 0x80011fe0, 0x80011fd8, 0x80011fd0,
+    0x80011fc8, 0x80011fc0, 0x80011fb8, 0x80011fb0, 0x80011fa4, 0x80011f9c,
+)
+
+
+def _validate_spell_description_widths(widths):
+    """Keep spell/skill descriptions inside their 124-pixel status box."""
+    def sidx(code):
+        b1, b2 = code >> 8, code & 0xff
+        row = (b1 - 0x81) if b1 < 0xa0 else (b1 - 0xc1)
+        return (b2 - 0x40) + row * 189
+
+    overflows = []
+    for index, description in enumerate(
+            NT.SPELLS[SPELL_DESCRIPTION_START:], SPELL_DESCRIPTION_START):
+        pixel_width = sum(
+            widths.get(sidx(ET.fullwidth(char)), 12) for char in description
+        )
+        if pixel_width > SPELL_DESCRIPTION_MAX_PIXELS:
+            overflows.append((index, pixel_width, description))
+
+    if overflows:
+        details = ", ".join(
+            f"{index}={width}px {description!r}"
+            for index, width, description in overflows
+        )
+        raise SystemExit(
+            f"Spell descriptions exceed {SPELL_DESCRIPTION_MAX_PIXELS}px: {details}"
+        )
+
+
+def _patch_compact_race_labels(exe):
+    """Translate the raw race-name pool used by demon status screens.
+
+    These screens do not use the rebuildable RACES table at 0x801043f8.  They
+    instead select from two executable-resident pointer tables; the second
+    table substitutes five shorter Japanese aliases.  Repack the pool with
+    the same Atlus race names as NT.RACES and point both tables at them.
+    """
+    if len(NT.RACES) != len(_COMPACT_RACE_PRIMARY_PTRS):
+        raise RuntimeError(
+            "Compact race table count no longer matches NT.RACES: "
+            f"{len(_COMPACT_RACE_PRIMARY_PTRS)} != {len(NT.RACES)}"
+        )
+
+    expected_secondary = list(_COMPACT_RACE_PRIMARY_PTRS)
+    expected_secondary[15] = 0x80012120  # Messian: shorter Japanese alias
+    expected_secondary[22] = 0x80012118  # Demonoid
+    expected_secondary[26] = 0x80012110  # Gaean
+    expected_secondary[30] = 0x80012108  # Vaccine
+    expected_secondary[40] = 0x80012100  # Virus
+    expected_tables = (_COMPACT_RACE_PRIMARY_PTRS, tuple(expected_secondary))
+
+    for table_addr, expected in zip(_COMPACT_RACE_PTR_TABLES, expected_tables):
+        actual = struct.unpack_from(f"<{len(expected)}I", exe, foff(table_addr))
+        if actual != expected:
+            raise RuntimeError(
+                f"Unexpected compact race pointer table at 0x{table_addr:08x}; "
+                "refusing to overwrite an incompatible executable"
+            )
+
+    pool = bytearray()
+    pointers = []
+    for name in NT.RACES:
+        pointers.append(_COMPACT_RACE_POOL_START + len(pool))
+        pool += bytes([SS.ASCII_MARKER]) + name.encode("ascii") + b"\0"
+
+    capacity = _COMPACT_RACE_POOL_END - _COMPACT_RACE_POOL_START
+    if len(pool) > capacity:
+        raise RuntimeError(
+            f"Compact race labels overflow by {len(pool) - capacity} bytes"
+        )
+
+    pool_off = foff(_COMPACT_RACE_POOL_START)
+    exe[pool_off:pool_off + capacity] = pool.ljust(capacity, b"\0")
+    packed_pointers = struct.pack(f"<{len(pointers)}I", *pointers)
+    for table_addr in _COMPACT_RACE_PTR_TABLES:
+        table_off = foff(table_addr)
+        exe[table_off:table_off + len(packed_pointers)] = packed_pointers
+
+
 def apply_name_tables(exe, slpm, PATHS):
     # single-level [N u16 offsets][data]: (base, list, alloc_end)
     NT.rebuild_single(exe, 0x80102962, NT.DEMONS,    0x801034da, PATHS)  # demons  (311)
@@ -664,6 +756,7 @@ def apply_name_tables(exe, slpm, PATHS):
     # traits: split OT(0x801034da)/DATA(0x801036da), 256 entries, dedup via TRAITS_MAP
     traits = _decode_traits(slpm)
     NT.rebuild_split(exe, 0x801034da, 0x801036da, traits, 0x801043f8, PATHS)
+    _patch_compact_race_labels(exe)
     _patch_bar_drink_menu(exe)
 
 def _patch_bar_drink_menu(exe):
@@ -1429,6 +1522,7 @@ def main(argv=None):
         overlay_files[name] = (base_sector, patcher(original), original)
     print("[2/7] kerning font...")
     font_slpm, widths, widths10 = kern_font(slpm)
+    _validate_spell_description_widths(widths)
     opening = build_opening_movie(
         input_bin,
         font_slpm,
