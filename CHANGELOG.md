@@ -13,6 +13,11 @@ your own verified source image.
 
 ## [Unreleased]
 
+## [0.1.3] - 2026-07-19
+
+This maintenance release translates another previously missed status label
+and fixes text rendering issues found in the COMP and spell menus.
+
 ### Fixed
 
 - Translated the demon race labels shown in the upper-left corner of demon
@@ -99,7 +104,8 @@ First public release.
 - Reproducible build (`build.py`) that patches a verified Japan Rev 1 image
   and emits distributable xdelta patches.
 
-[Unreleased]: https://github.com/Roman215/smt2-psx-translation/compare/v0.1.2...HEAD
+[Unreleased]: https://github.com/Roman215/smt2-psx-translation/compare/v0.1.3...HEAD
+[0.1.3]: https://github.com/Roman215/smt2-psx-translation/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/Roman215/smt2-psx-translation/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/Roman215/smt2-psx-translation/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/Roman215/smt2-psx-translation/releases/tag/v0.1.0
