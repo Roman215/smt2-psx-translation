@@ -24,10 +24,18 @@ import name_tables as NT, translations as TR, menu_table as MT, sys_strings as S
 import rdlogo as RD, map_names as MN, status_screen as STATUS
 import name_entry as NE
 import opening_movie as OM
+import overlay_text as OT
 from cdecc import fix_mode2form1
 
 CMDINIT_SECTOR = 67152                        # CMDINIT.BIN base sector in the bin
 RDLOGO_SECTOR = 67181                         # RDLOGO.BIN base sector in the bin
+OVERLAY_FILES = {
+    # name: (base sector, byte size, translation function)
+    "3DMAP.BIN": (67022, 58364, OT.patch_3dmap),
+    "CASINO3.BIN": (67078, 33336, OT.patch_casino3),
+    "OMAKE.BIN": (67171, 13840, OT.patch_omake),
+    "RAG.BIN": (67178, 4157, OT.patch_rag),
+}
 
 # ---- Static exe dialogue banks 6/7 -------------------------------------------------
 # Banks 6 and 7 are NOT loaded from disc; they are static data inside the exe and are
@@ -1053,6 +1061,7 @@ def write_patched_bin(
     rdlogo=None,
     rdlogo0=None,
     opening=None,
+    overlay_files=None,
 ):
     bind=bytearray(Path(input_bin).read_bytes())
     em=lambda f:(67202+f//2048)*2352+24+(f%2048)          # exe -> bin
@@ -1073,6 +1082,16 @@ def write_patched_bin(
     if rdlogo is not None:
         for i in range(len(rdlogo0)):
             if rdlogo0[i]!=rdlogo[i]: edits.append((rm(i),rdlogo[i]))
+    if overlay_files is not None:
+        for name, (base_sector, patched, original) in overlay_files.items():
+            if len(patched) != len(original):
+                raise SystemExit(f"{name}: overlay patch changed the file size")
+            om = lambda f, sector=base_sector: (
+                (sector + f // 2048) * 2352 + 24 + (f % 2048)
+            )
+            for i in range(len(original)):
+                if original[i] != patched[i]:
+                    edits.append((om(i), patched[i]))
 
     if len(packa)!=len(packa0):
         # PACKA.BIN is the last ISO file.  Update its directory-record size in
@@ -1342,6 +1361,10 @@ def main(argv=None):
     packa0 = extract_from_bin(bind, 68191, PACKA_SIZE)
     cmdinit0 = extract_from_bin(bind, CMDINIT_SECTOR, CMDINIT_SIZE)
     rdlogo0 = extract_from_bin(bind, RDLOGO_SECTOR, RDLOGO_SIZE)
+    overlay_files = {}
+    for name, (base_sector, size, patcher) in OVERLAY_FILES.items():
+        original = extract_from_bin(bind, base_sector, size)
+        overlay_files[name] = (base_sector, patcher(original), original)
     print("[2/7] kerning font...")
     font_slpm, widths, widths10 = kern_font(slpm)
     opening = build_opening_movie(
@@ -1402,6 +1425,7 @@ def main(argv=None):
         rdlogo,
         rdlogo0,
         opening,
+        overlay_files,
     )
     print(f"DONE. {output_bin}, {sectors} patched sectors, {output_bin.stat().st_size} bytes")
     if pyxdelta is not None:
