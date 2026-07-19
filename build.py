@@ -809,6 +809,15 @@ def _decode_ab_sources(packa,slpm):
             raise SystemExit(
                 f"bank{bank}: expected {expected_count} entries, found {count}"
             )
+        collisions=[
+            index for index,message in enumerate(messages)
+            if any(len(token)==3 and token[2]==BP.DICT_JT_INDEX for token in message)
+        ]
+        if collisions:
+            raise SystemExit(
+                f"bank{bank}: stock A/B control slot {BP.DICT_JT_INDEX} is not free "
+                f"(messages {collisions[:8]!r})"
+            )
         decoded[bank]=messages
     return file_bounds,specs,decoded
 
@@ -882,6 +891,7 @@ def verify_ab_banks(exe, packa, specs, authored):
                     f"bank{bank} msg {index}: decode mismatch\n  got {got!r}\n  want {want!r}"
                 )
     BP.verify_ab_runtime(exe)
+    MT.verify_ab_menu(exe)
 
 def apply_ab_banks(exe, packa, slpm):
     """Rebuild English bank 4/5, growing bank 4 by AB4_EXTRA_SECTORS.
@@ -899,8 +909,25 @@ def apply_ab_banks(exe, packa, slpm):
     # build_ab_block interns exact duplicates independently within each bank.
     # Weight the Huffman tree by those physically stored streams, not by every
     # table entry that happens to point to them.
-    paths=BP.build_ab_tree(exe,_unique_stored_ab_streams(authored))
+    # Negotiation choices use a separate executable-resident A/B menu table.
+    # Its plain-glyph streams must participate in the same tree build before
+    # the old Japanese table can be re-encoded safely.
+    ab_tree_streams=(
+        _unique_stored_ab_streams(authored)+MT.ab_menu_token_streams()
+    )
+    paths=BP.build_ab_tree(exe,ab_tree_streams)
+    if BP.AB_SYM+BP.AB_TREE_USED>MT.AB_MENU_DATA:
+        raise SystemExit(
+            f"A/B tree overlaps relocated menu data: "
+            f"{BP.AB_SYM+BP.AB_TREE_USED:#x}>{MT.AB_MENU_DATA:#x}"
+        )
     BP.install_ab_runtime(exe)
+    if BP.AB4_OFFTAB>=BP.AB_SYM:
+        raise SystemExit(
+            "A/B dictionary offset table unexpectedly occupies the symbol-table tail"
+        )
+    menu_used,menu_budget=MT.rebuild_ab_menu(exe,paths)
+    print(f"  A/B menu: {menu_used}/{menu_budget} bytes")
     rebuilt={
         bank:build_ab_block(authored[bank],len(authored[bank]),paths)
         for bank in (4,5)

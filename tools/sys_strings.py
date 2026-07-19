@@ -439,9 +439,10 @@ AUDITED_SYSTEM_TEXT = {
     0x3f40: "Mr. DNA",
     0x3f50: "Timing X",
 
-    # Third live copy used by healing items from the field item menu.  The two
-    # COMP/item-menu copies above do not cover this call path.
-    0x4e5c: "Use it on whom?",
+    # The third field-item target prompt at file offset 0x4e5c is not listed
+    # here: its callers append SJIS directly and bypass the marker-aware system
+    # printer. build_prod_exe relocates a fullwidth English copy and repoints
+    # both callers instead.
 
     # Cathedral/fusion selection and equipment-detail labels.
     0x5230: "F.Swd",
