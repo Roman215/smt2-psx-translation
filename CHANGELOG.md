@@ -13,6 +13,20 @@ your own verified source image.
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-07-19
+
+This hotfix release addresses two issues found shortly after 0.1.1.
+
+### Fixed
+
+- Fixed successful demon recruitment entering the wrong choice handler, which
+  could show an empty YES/NO prompt, falsely report a full demon roster, and
+  corrupt the dismissal screen even when the player had no demons.
+- Fixed the Bar's drink list layout so "Speed Cocktail" no longer runs into
+  its price and "Miracle Tonic" no longer loses its initial M.
+- Corrected suspenseful, two-part demon-negotiation messages so results such as
+  "went berserk" and "calmed down" connect naturally to the demon's name.
+
 ## [0.1.1] - 2026-07-18
 
 Thank you to arciks1192-svg who tried the first public release and reported what
@@ -76,6 +90,7 @@ First public release.
 - Reproducible build (`build.py`) that patches a verified Japan Rev 1 image
   and emits distributable xdelta patches.
 
-[Unreleased]: https://github.com/Roman215/smt2-psx-translation/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/Roman215/smt2-psx-translation/compare/v0.1.2...HEAD
+[0.1.2]: https://github.com/Roman215/smt2-psx-translation/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/Roman215/smt2-psx-translation/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/Roman215/smt2-psx-translation/releases/tag/v0.1.0
