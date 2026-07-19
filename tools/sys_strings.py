@@ -243,7 +243,7 @@ RETRANSLATED = {
     0x17e8: " removed.",                  # [name]の死体を捨てました
     0x1800: " left.",                     # [name]と別れました
     0x182c: "Analyze whom?",              # どの悪魔を解析しますか？
-    0x1848: "Use on?",                    # 誰に使いますか？
+    0x1848: "Use it on whom?",            # 誰に使いますか？
     0x185c: "Mimic whom?",                # 誰のものまねをしますか？
     0x1878: "This demon cannot be summoned.",
     0x1894: "Magic cannot be used right now.",
@@ -289,7 +289,7 @@ RETRANSLATED = {
     0x1e9c: "Create suspend data.",        # 中断セーブを行います
     0x1eec: "Oh, you're short on ћ.",       # あら ћが足りないわ
     0x1f0c: "Enter:",                     # コードを入力せよ：
-    0x201c: "Use on?",                    # 誰に使いますか？
+    0x201c: "Use it on whom?",            # 誰に使いますか？
     0x2308: "Leave",                      # 店を出る
 
     # System-menu and Config help
@@ -438,6 +438,10 @@ AUDITED_SYSTEM_TEXT = {
     0x3f2c: "Lucky Khan",
     0x3f40: "Mr. DNA",
     0x3f50: "Timing X",
+
+    # Third live copy used by healing items from the field item menu.  The two
+    # COMP/item-menu copies above do not cover this call path.
+    0x4e5c: "Use it on whom?",
 
     # Cathedral/fusion selection and equipment-detail labels.
     0x5230: "F.Swd",
