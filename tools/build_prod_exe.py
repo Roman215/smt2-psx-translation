@@ -5,7 +5,8 @@ authored English negotiation and battle-command fragments. Unfinished bank-4
 entries are represented by English markers rather than Japanese fallbacks.
 Each mined dictionary entry is a control-flagged Huffman leaf (struct=0xC000|6,
 symbol=0x8540+i). The slot-6 stub calls an expansion handler, which looks up the
-full string and tail-jumps the stock append routine used by name inserts."""
+full string and tail-jumps the stock append routine used by name inserts. Both
+the common and negotiation-only slot-6 stubs enter that handler."""
 import struct
 import build_en_tree as ET
 
@@ -37,6 +38,16 @@ APPEND    = 0x80058244                 # stock append: a0 = null-terminated SJIS
 EPILOGUE  = 0x80059044                 # stock dispatch epilogue
 DECODED_SYM = 0x801d15de               # decoder's just-decoded symbol global
 STOCK6    = 0x80059ce4                 # stock slot-6 handler = event-script choice-menu op
+DISPATCH  = 0x800582f0                 # common control-index dispatcher
+SCRIPT_DISPATCH_CALL = 0x8005764c      # raw event-script dispatch call site
+SCRIPT_CHOICE_INDEX = 6
+# Negotiation modes 4/5 route controls through a separate dispatcher.  Its
+# stock A/B trees never reference slot 6, so the rebuilt tree can safely use
+# that slot for dictionary leaves as long as this second stub is hooked too.
+AB_JT     = 0x8001445c
+AB_STUB6  = 0x8007d924
+AB_EPILOGUE = 0x8007e10c
+AB_STOCK6 = 0x80084720
 
 # The stock C/D tree has two control leaves with the nominal symbol 0x5355
 # ("SU").  Dispatch 113 prints the primary numeric slot at 0x801fd534, while
@@ -51,10 +62,12 @@ SECONDARY_NUMBER_INDEX = 118
 # Negotiation/battle text (banks 4/5) carries a second mined dictionary. Codes
 # extend the shared namespace: [0x8540, 0x8540+NCD) are the C/D entries (u32
 # pointer table in the cave); [0x8540+NCD, 0x8540+NCD+NAB) are A/B-local
-# entries (u16 offset table + strings in dead exe space). Both dispatch through
-# jump-table slot 6: the cave handler falls through to the continuation at
-# AB4_HANDLER, which range-checks the A/B window and otherwise forwards to the
-# stock slot-6 (choice-menu) op exactly like the cave handler used to.
+# entries (u16 offset table + strings in dead exe space). Both use control slot
+# 6. The common dispatcher and the negotiation-only A/B dispatcher each need a
+# slot-6 stub that calls the same cave handler, then returns through its own
+# epilogue. The cave handler falls through to the continuation at AB4_HANDLER,
+# which range-checks the A/B window and otherwise forwards to the common stock
+# slot-6 (choice-menu) op exactly like the cave handler used to.
 #
 # The continuation lives in the LAST 64 bytes of bank 7's cave slice (build.py
 # caps bank 7 at AB4_HANDLER), so its address is a build-time constant.  The
@@ -66,6 +79,19 @@ SECONDARY_NUMBER_INDEX = 118
 # whole native region up to 0x801171d8).
 AB4_HANDLER = DICT_BASE-0x40           # continuation handler: 64-byte cave slot
 AB4_STRBASE = STRUCT                   # u16 string offsets relative to STRUCT
+# Six instructions at the end of the first dead C/D tree-table tail distinguish
+# raw event-script choice op 6 from compressed-text dictionary op 6.  Keep this
+# reservation out of _ab_string_regions so expansion strings cannot overwrite it.
+SCRIPT_DISPATCH_WRAPPER = SYM-0x18
+# The field-item target prompt is appended directly at two call sites instead
+# of going through build.py's marker-aware system-string printer.  Give it a
+# proper fullwidth copy immediately before the dispatch wrapper and repoint
+# those calls; marker-prefixed one-byte text renders as garbage on this path.
+ITEM_TARGET_PROMPT = SCRIPT_DISPATCH_WRAPPER-0x20
+ITEM_TARGET_PROMPT_SIZE = 0x20
+ITEM_TARGET_PROMPT_TEXT = "Use it on whom?"
+ITEM_TARGET_PROMPT_STOCK = 0x8001465c
+ITEM_TARGET_PROMPT_CALLS = (0x8007e9a0, 0x8007f2a8)
 
 # ---- MIPS instruction encoders (R3000) --------------------------------------------
 ZERO,V0,V1,A0,T0,T1,T2=0,2,3,4,8,9,10
@@ -73,7 +99,8 @@ RI=lambda op,rs,rt,imm:((op&0x3f)<<26)|((rs&0x1f)<<21)|((rt&0x1f)<<16)|(imm&0xff
 LUI=lambda rt,i:RI(0x0f,0,rt,i); LHU=lambda rt,o,rs:RI(0x25,rs,rt,o)
 LW=lambda rt,o,rs:RI(0x23,rs,rt,o); ADDIU=lambda rt,rs,i:RI(0x09,rs,rt,i)
 ORI=lambda rt,rs,i:RI(0x0d,rs,rt,i); SLTIU=lambda rt,rs,i:RI(0x0b,rs,rt,i)
-BEQ=lambda rs,rt,off:RI(0x04,rs,rt,off)
+BEQ=lambda rs,rt,off:RI(0x04,rs,rt,off); BNE=lambda rs,rt,off:RI(0x05,rs,rt,off)
+SH=lambda rt,o,rs:RI(0x29,rs,rt,o)
 SLL=lambda rd,rt,sa:((rt&0x1f)<<16)|((rd&0x1f)<<11)|((sa&0x1f)<<6)
 ADDU=lambda rd,rs,rt:((rs&0x1f)<<21)|((rt&0x1f)<<16)|((rd&0x1f)<<11)|0x21
 SUBU=lambda rd,rs,rt:((rs&0x1f)<<21)|((rt&0x1f)<<16)|((rd&0x1f)<<11)|0x23
@@ -126,7 +153,7 @@ def _ab_string_regions():
     if CD_TREE_USED is None:
         raise RuntimeError("build_english_tree must run before placing A/B strings")
     return [
-        (STRUCT+CD_TREE_USED, SYM),
+        (STRUCT+CD_TREE_USED, ITEM_TARGET_PROMPT),
         (SYM+CD_TREE_USED, SYM+STCAP-SYM_TAIL_RESERVE),
     ]
 
@@ -233,6 +260,27 @@ def verify_ab_runtime(exe):
     """Re-read the installed A/B dictionary from the exe and check every string."""
     def r16(a): return struct.unpack_from("<H",exe,_foff(a))[0]
     def r32(a): return struct.unpack_from("<I",exe,_foff(a))[0]
+    if r32(SCRIPT_DISPATCH_CALL)!=JAL(SCRIPT_DISPATCH_WRAPPER):
+        raise SystemExit("raw event-script dispatcher does not use the slot-6 guard")
+    if r32(SCRIPT_DISPATCH_CALL+4)!=SH(A0,0x15dc,V1):
+        raise SystemExit("raw event-script dispatcher delay-slot store is corrupt")
+    for i,word in enumerate(_script_dispatch_wrapper_words()):
+        if r32(SCRIPT_DISPATCH_WRAPPER+4*i)!=word:
+            raise SystemExit("raw event-script slot-6 guard is corrupt")
+    prompt=_item_target_prompt_blob()
+    start=_foff(ITEM_TARGET_PROMPT)
+    if bytes(exe[start:start+ITEM_TARGET_PROMPT_SIZE]) != (
+            prompt+bytes(ITEM_TARGET_PROMPT_SIZE-len(prompt))):
+        raise SystemExit("field-item target prompt is corrupt")
+    for site in ITEM_TARGET_PROMPT_CALLS:
+        if (r32(site)!=LUI(A0,hi(ITEM_TARGET_PROMPT)) or
+                r32(site+4)!=JAL(APPEND) or
+                r32(site+8)!=ADDIU(A0,A0,lo(ITEM_TARGET_PROMPT))):
+            raise SystemExit("field-item target prompt reference is corrupt")
+    if (r32(AB_JT+DICT_JT_INDEX*4)!=AB_STUB6 or
+            r32(AB_STUB6)!=JAL(DICT_HANDLER) or r32(AB_STUB6+4)!=NOP or
+            r32(AB_STUB6+8)!=J(AB_EPILOGUE) or r32(AB_STUB6+12)!=NOP):
+        raise SystemExit("negotiation slot-6 dictionary dispatch is corrupt")
     if r32(DICT_HANDLER+13*4)!=J(AB4_HANDLER):
         raise SystemExit("cave handler does not fall through to the A/B continuation")
     # SLTIU(V0,T2,NAB) is the continuation's second word; its imm16 must match.
@@ -248,6 +296,39 @@ def verify_ab_runtime(exe):
             raise SystemExit(f"A/B dictionary string {j} corrupt at {addr:#x}: {s!r}")
 
 def _foff(a): return (a-0x80010000)+0x800
+
+def _script_dispatch_wrapper_words():
+    """Guard raw choice op 6 from a stale decoded dictionary symbol.
+
+    The raw event-script path dispatches an opcode without updating
+    DECODED_SYM.  Slot 6 is shared with dictionary expansion, so an A/B-local
+    dictionary symbol left by the preceding dialogue could otherwise make a
+    choice menu expand arbitrary text instead of invoking STOCK6.
+
+    All non-choice raw opcodes are unchanged.  Clearing DECODED_SYM for choice
+    op 6 makes both dictionary range checks fail and forward to STOCK6.  Calls
+    from the compressed-text decoders bypass this wrapper and retain the real
+    dictionary symbol.
+    """
+    return [
+        ADDIU(V0,ZERO,SCRIPT_CHOICE_INDEX),
+        BNE(A0,V0,2),                            # non-choice -> tail dispatch
+        LUI(V0,(DECODED_SYM>>16)&0xffff),        # branch delay slot
+        SH(ZERO,DECODED_SYM&0xffff,V0),
+        J(DISPATCH),
+        NOP,
+    ]
+
+def _item_target_prompt_blob():
+    blob=bytearray()
+    for ch in ITEM_TARGET_PROMPT_TEXT:
+        blob+=ET.fullwidth(ch).to_bytes(2,"big")
+    blob.append(0)
+    if len(blob)>ITEM_TARGET_PROMPT_SIZE:
+        raise SystemExit(
+            f"field-item target prompt overflow: {len(blob)}>{ITEM_TARGET_PROMPT_SIZE}"
+        )
+    return bytes(blob)
 
 def control_index_map(slpm):
     def oU16(a): return struct.unpack_from("<H",slpm,_foff(a))[0]
@@ -401,6 +482,17 @@ def build_ab_tree(exe, messages):
     counts=Counter(token for message in messages for token in message)
     if not counts:
         raise ValueError("A/B corpus is empty")
+    dict_limit=DICT_CODE_BASE+len(_DICT_ENTRIES)+len(_AB_LOCAL_ENTRIES)
+    slot6_controls=[
+        token for token in counts
+        if (len(token)==3 and token[2]==DICT_JT_INDEX and
+            not DICT_CODE_BASE<=token[0]<dict_limit)
+    ]
+    if slot6_controls:
+        raise SystemExit(
+            f"A/B control slot {DICT_JT_INDEX} collides with dictionary runtime: "
+            f"{slot6_controls!r}"
+        )
 
     # Reserve nibble 0 at the root as an invalid padding branch. A/B streams are
     # individually byte-aligned, so allowing a zero pad nibble to reach a real
@@ -481,7 +573,34 @@ def build_ab_tree(exe, messages):
 def _install_dictionary_runtime(exe):
     """Write the dict handler, pointer table, expansion strings, and stub 6."""
     def w32(a,v): struct.pack_into("<I",exe,_foff(a),v)
+    def r32(a): return struct.unpack_from("<I",exe,_foff(a))[0]
     entries=_DICT_ENTRIES
+    # The raw event-script interpreter and compressed-text decoder both enter
+    # the common control dispatcher.  Route only the raw call through a guard
+    # that clears a stale dictionary symbol for choice-menu opcode 6.  The
+    # JAL's existing delay-slot store of the raw opcode remains untouched.
+    if (r32(SCRIPT_DISPATCH_CALL)!=JAL(DISPATCH) or
+            r32(SCRIPT_DISPATCH_CALL+4)!=SH(A0,0x15dc,V1)):
+        raise SystemExit("unexpected raw event-script dispatcher call site")
+    w32(SCRIPT_DISPATCH_CALL,JAL(SCRIPT_DISPATCH_WRAPPER))
+    for i,word in enumerate(_script_dispatch_wrapper_words()):
+        w32(SCRIPT_DISPATCH_WRAPPER+4*i,word)
+    # Field healing items append their target prompt directly through APPEND,
+    # bypassing the marker-aware raw-string printer.  Relocate a fullwidth copy
+    # into reserved dead table space and update both item-use call sites.
+    stock_hi=(ITEM_TARGET_PROMPT_STOCK>>16)&0xffff
+    stock_lo=ITEM_TARGET_PROMPT_STOCK&0xffff
+    for site in ITEM_TARGET_PROMPT_CALLS:
+        if (r32(site)!=LUI(A0,stock_hi) or r32(site+4)!=JAL(APPEND) or
+                r32(site+8)!=ADDIU(A0,A0,stock_lo)):
+            raise SystemExit("unexpected field-item target prompt call site")
+        w32(site,LUI(A0,hi(ITEM_TARGET_PROMPT)))
+        w32(site+8,ADDIU(A0,A0,lo(ITEM_TARGET_PROMPT)))
+    prompt=_item_target_prompt_blob()
+    start=_foff(ITEM_TARGET_PROMPT)
+    exe[start:start+ITEM_TARGET_PROMPT_SIZE] = (
+        prompt+bytes(ITEM_TARGET_PROMPT_SIZE-len(prompt))
+    )
     # Expansion strings (fullwidth SJIS, single-0 terminated) + pointer table.
     strs_base=DICT_PTRS+4*len(entries)
     ptrs=[]; blob=bytearray()
@@ -495,13 +614,9 @@ def _install_dictionary_runtime(exe):
     for i,p in enumerate(ptrs): w32(DICT_PTRS+i*4,p)
     exe[_foff(strs_base):_foff(strs_base)+len(blob)]=blob
     # Handler.  CRITICAL: jump-table slot 6 is NOT free at runtime -- it is the
-    # event-script CHOICE-MENU op.  The interpreter's synthetic dispatcher
-    # (0x80057634: lbu from the script cursor *0x801d15e0 -> sh 0x801d15dc ->
-    # jal 0x800582f0) feeds raw script bytes into the same jump table, and the
-    # first YES/NO choice dispatches index 6 with 0x801d15de still holding the
-    # ED symbol (proven live: choice save state has 15dc=6, 15de=0x4544).  So
-    # the handler must range-check the symbol: dict codes take the append path,
-    # anything else falls through to the stock slot-6 handler unchanged.
+    # event-script CHOICE-MENU op.  The raw interpreter is guarded above, but
+    # keep both dictionary range checks defensive: dict codes take the append
+    # path and anything else falls through to the stock slot-6 handler.
     #   a0 = DICT_PTRS[decoded_sym - 0x8540]; tail-jump the stock append.
     # ori fills the R3000 lhu load-delay slot before v1 is consumed, and
     # subtracting DICT_CODE_BASE first keeps every immediate in range.
@@ -536,3 +651,12 @@ def _install_dictionary_runtime(exe):
     stub=STUBS+DICT_JT_INDEX*0x10
     w32(stub+0,JAL(DICT_HANDLER)); w32(stub+4,NOP); w32(stub+8,J(EPILOGUE)); w32(stub+12,NOP)
     w32(JT+DICT_JT_INDEX*4,stub)   # already points here in the stock exe; keep explicit
+    # Modes 4/5 (negotiation and the small A/B battle-fragment bank) bypass the
+    # common dispatcher above and use their own jump table at AB_JT.  Slot 6 is
+    # absent from every stock A/B stream, so redirect that dedicated stub to
+    # the same dictionary handler and retain its negotiation epilogue.
+    if (r32(AB_JT+DICT_JT_INDEX*4)!=AB_STUB6 or
+            r32(AB_STUB6)!=JAL(AB_STOCK6) or r32(AB_STUB6+4)!=NOP or
+            r32(AB_STUB6+8)!=J(AB_EPILOGUE) or r32(AB_STUB6+12)!=NOP):
+        raise SystemExit("unexpected negotiation slot-6 dispatch stub")
+    w32(AB_STUB6,JAL(DICT_HANDLER))
