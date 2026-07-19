@@ -39,12 +39,14 @@ EPILOGUE  = 0x80059044                 # stock dispatch epilogue
 DECODED_SYM = 0x801d15de               # decoder's just-decoded symbol global
 STOCK6    = 0x80059ce4                 # stock slot-6 handler = event-script choice-menu op
 DISPATCH  = 0x800582f0                 # common control-index dispatcher
-SCRIPT_DISPATCH_CALL = 0x8005764c      # raw event-script dispatch call site
+SCRIPT_DISPATCH_CALL = 0x8005764c      # raw common event-script dispatch call site
 SCRIPT_CHOICE_INDEX = 6
 # Negotiation modes 4/5 route controls through a separate dispatcher.  Its
 # stock A/B trees never reference slot 6, so the rebuilt tree can safely use
 # that slot for dictionary leaves as long as this second stub is hooked too.
 AB_JT     = 0x8001445c
+AB_DISPATCH = 0x8007d864
+AB_SCRIPT_DISPATCH_CALL = 0x8005758c
 AB_STUB6  = 0x8007d924
 AB_EPILOGUE = 0x8007e10c
 AB_STOCK6 = 0x80084720
@@ -66,8 +68,8 @@ SECONDARY_NUMBER_INDEX = 118
 # 6. The common dispatcher and the negotiation-only A/B dispatcher each need a
 # slot-6 stub that calls the same cave handler, then returns through its own
 # epilogue. The cave handler falls through to the continuation at AB4_HANDLER,
-# which range-checks the A/B window and otherwise forwards to the common stock
-# slot-6 (choice-menu) op exactly like the cave handler used to.
+# which range-checks the A/B window and otherwise forwards to the stock slot-6
+# routine belonging to the dispatcher that entered the shared handler.
 #
 # The continuation lives in the LAST 64 bytes of bank 7's cave slice (build.py
 # caps bank 7 at AB4_HANDLER), so its address is a build-time constant.  The
@@ -92,9 +94,16 @@ ITEM_TARGET_PROMPT_SIZE = 0x20
 ITEM_TARGET_PROMPT_TEXT = "Use it on whom?"
 ITEM_TARGET_PROMPT_STOCK = 0x8001465c
 ITEM_TARGET_PROMPT_CALLS = (0x8007e9a0, 0x8007f2a8)
+# The negotiation-mode event interpreter calls its own dispatcher and passes
+# the raw opcode in a1 instead of a0.  It needs the same stale-symbol guard as
+# the common interpreter.  Once a non-dictionary slot 6 reaches the shared
+# dictionary handler, its caller context selects the correct stock fallback:
+# the common choice-menu handler or the negotiation handler at AB_STOCK6.
+AB_SCRIPT_DISPATCH_WRAPPER = ITEM_TARGET_PROMPT-0x18
+STOCK6_SELECTOR = AB_SCRIPT_DISPATCH_WRAPPER-0x18
 
 # ---- MIPS instruction encoders (R3000) --------------------------------------------
-ZERO,V0,V1,A0,T0,T1,T2=0,2,3,4,8,9,10
+ZERO,V0,V1,A0,A1,T0,T1,T2=0,2,3,4,5,8,9,10
 RI=lambda op,rs,rt,imm:((op&0x3f)<<26)|((rs&0x1f)<<21)|((rt&0x1f)<<16)|(imm&0xffff)
 LUI=lambda rt,i:RI(0x0f,0,rt,i); LHU=lambda rt,o,rs:RI(0x25,rs,rt,o)
 LW=lambda rt,o,rs:RI(0x23,rs,rt,o); ADDIU=lambda rt,rs,i:RI(0x09,rs,rt,i)
@@ -153,7 +162,7 @@ def _ab_string_regions():
     if CD_TREE_USED is None:
         raise RuntimeError("build_english_tree must run before placing A/B strings")
     return [
-        (STRUCT+CD_TREE_USED, ITEM_TARGET_PROMPT),
+        (STRUCT+CD_TREE_USED, STOCK6_SELECTOR),
         (SYM+CD_TREE_USED, SYM+STCAP-SYM_TAIL_RESERVE),
     ]
 
@@ -250,7 +259,7 @@ def install_ab_runtime(exe):
         ADDU(A0,A0,V0),
         J(APPEND),
         NOP,
-        J(STOCK6),                               # L_STOCK
+        J(STOCK6_SELECTOR),                      # L_STOCK
         NOP,
     ]
     assert len(handler)*4<=DICT_BASE-AB4_HANDLER
@@ -267,6 +276,16 @@ def verify_ab_runtime(exe):
     for i,word in enumerate(_script_dispatch_wrapper_words()):
         if r32(SCRIPT_DISPATCH_WRAPPER+4*i)!=word:
             raise SystemExit("raw event-script slot-6 guard is corrupt")
+    if r32(AB_SCRIPT_DISPATCH_CALL)!=JAL(AB_SCRIPT_DISPATCH_WRAPPER):
+        raise SystemExit("raw negotiation script dispatcher does not use the slot-6 guard")
+    if r32(AB_SCRIPT_DISPATCH_CALL+4)!=SH(A1,0x15dc,V1):
+        raise SystemExit("raw negotiation script dispatcher delay-slot store is corrupt")
+    for i,word in enumerate(_ab_script_dispatch_wrapper_words()):
+        if r32(AB_SCRIPT_DISPATCH_WRAPPER+4*i)!=word:
+            raise SystemExit("raw negotiation slot-6 guard is corrupt")
+    for i,word in enumerate(_stock6_selector_words()):
+        if r32(STOCK6_SELECTOR+4*i)!=word:
+            raise SystemExit("dictionary slot-6 fallback selector is corrupt")
     prompt=_item_target_prompt_blob()
     start=_foff(ITEM_TARGET_PROMPT)
     if bytes(exe[start:start+ITEM_TARGET_PROMPT_SIZE]) != (
@@ -277,8 +296,15 @@ def verify_ab_runtime(exe):
                 r32(site+4)!=JAL(APPEND) or
                 r32(site+8)!=ADDIU(A0,A0,lo(ITEM_TARGET_PROMPT))):
             raise SystemExit("field-item target prompt reference is corrupt")
+    common_stub=STUBS+DICT_JT_INDEX*0x10
+    if (r32(JT+DICT_JT_INDEX*4)!=common_stub or
+            r32(common_stub)!=JAL(DICT_HANDLER) or
+            r32(common_stub+4)!=ADDIU(A1,ZERO,0) or
+            r32(common_stub+8)!=J(EPILOGUE) or r32(common_stub+12)!=NOP):
+        raise SystemExit("common slot-6 dictionary dispatch is corrupt")
     if (r32(AB_JT+DICT_JT_INDEX*4)!=AB_STUB6 or
-            r32(AB_STUB6)!=JAL(DICT_HANDLER) or r32(AB_STUB6+4)!=NOP or
+            r32(AB_STUB6)!=JAL(DICT_HANDLER) or
+            r32(AB_STUB6+4)!=ADDIU(A1,ZERO,1) or
             r32(AB_STUB6+8)!=J(AB_EPILOGUE) or r32(AB_STUB6+12)!=NOP):
         raise SystemExit("negotiation slot-6 dictionary dispatch is corrupt")
     if r32(DICT_HANDLER+13*4)!=J(AB4_HANDLER):
@@ -316,6 +342,33 @@ def _script_dispatch_wrapper_words():
         LUI(V0,(DECODED_SYM>>16)&0xffff),        # branch delay slot
         SH(ZERO,DECODED_SYM&0xffff,V0),
         J(DISPATCH),
+        NOP,
+    ]
+
+def _ab_script_dispatch_wrapper_words():
+    """Guard raw negotiation choice op 6 before the A/B dispatcher.
+
+    This interpreter passes the opcode in a1.  Compressed A/B controls bypass
+    this wrapper, so clearing the decoded-symbol global here cannot affect a
+    real dictionary leaf.
+    """
+    return [
+        ADDIU(V0,ZERO,SCRIPT_CHOICE_INDEX),
+        BNE(A1,V0,2),                            # non-choice -> tail dispatch
+        LUI(V0,(DECODED_SYM>>16)&0xffff),        # branch delay slot
+        SH(ZERO,DECODED_SYM&0xffff,V0),
+        J(AB_DISPATCH),
+        NOP,
+    ]
+
+def _stock6_selector_words():
+    """Select the stock slot-6 routine using the dispatch stub's a1 flag."""
+    return [
+        BEQ(A1,ZERO,3),                          # common dispatcher -> STOCK6
+        NOP,
+        J(AB_STOCK6),
+        NOP,
+        J(STOCK6),
         NOP,
     ]
 
@@ -575,16 +628,24 @@ def _install_dictionary_runtime(exe):
     def w32(a,v): struct.pack_into("<I",exe,_foff(a),v)
     def r32(a): return struct.unpack_from("<I",exe,_foff(a))[0]
     entries=_DICT_ENTRIES
-    # The raw event-script interpreter and compressed-text decoder both enter
-    # the common control dispatcher.  Route only the raw call through a guard
-    # that clears a stale dictionary symbol for choice-menu opcode 6.  The
-    # JAL's existing delay-slot store of the raw opcode remains untouched.
+    # The raw event-script interpreters and compressed-text decoders share
+    # dispatch slots. Route only the two raw calls through guards that clear a
+    # stale dictionary symbol for choice-menu opcode 6. The JAL delay-slot
+    # stores of the raw opcode remain untouched.
     if (r32(SCRIPT_DISPATCH_CALL)!=JAL(DISPATCH) or
             r32(SCRIPT_DISPATCH_CALL+4)!=SH(A0,0x15dc,V1)):
         raise SystemExit("unexpected raw event-script dispatcher call site")
+    if (r32(AB_SCRIPT_DISPATCH_CALL)!=JAL(AB_DISPATCH) or
+            r32(AB_SCRIPT_DISPATCH_CALL+4)!=SH(A1,0x15dc,V1)):
+        raise SystemExit("unexpected raw negotiation script dispatcher call site")
     w32(SCRIPT_DISPATCH_CALL,JAL(SCRIPT_DISPATCH_WRAPPER))
     for i,word in enumerate(_script_dispatch_wrapper_words()):
         w32(SCRIPT_DISPATCH_WRAPPER+4*i,word)
+    w32(AB_SCRIPT_DISPATCH_CALL,JAL(AB_SCRIPT_DISPATCH_WRAPPER))
+    for i,word in enumerate(_ab_script_dispatch_wrapper_words()):
+        w32(AB_SCRIPT_DISPATCH_WRAPPER+4*i,word)
+    for i,word in enumerate(_stock6_selector_words()):
+        w32(STOCK6_SELECTOR+4*i,word)
     # Field healing items append their target prompt directly through APPEND,
     # bypassing the marker-aware raw-string printer.  Relocate a fullwidth copy
     # into reserved dead table space and update both item-use call sites.
@@ -616,14 +677,15 @@ def _install_dictionary_runtime(exe):
     # Handler.  CRITICAL: jump-table slot 6 is NOT free at runtime -- it is the
     # event-script CHOICE-MENU op.  The raw interpreter is guarded above, but
     # keep both dictionary range checks defensive: dict codes take the append
-    # path and anything else falls through to the stock slot-6 handler.
+    # path and anything else falls through to the caller's stock slot-6 handler.
     #   a0 = DICT_PTRS[decoded_sym - 0x8540]; tail-jump the stock append.
     # ori fills the R3000 lhu load-delay slot before v1 is consumed, and
     # subtracting DICT_CODE_BASE first keeps every immediate in range.
     # Codes past the C/D window fall through to the continuation at AB4_BASE,
-    # which handles the A/B-local window and otherwise forwards to STOCK6.
-    # t1 (sym - 0x8540) stays live across that jump -- the delay slot only
-    # clobbers v1.
+    # which handles the A/B-local window and otherwise uses the caller-context
+    # selector to forward to STOCK6 or AB_STOCK6.
+    # t1 (sym - 0x8540) and the a1 caller-context flag stay live across that
+    # jump -- the delay slot only clobbers v1.
     L_STOCK=13                       # index of the fallthrough branch target
     handler=[
         LUI(V0,(DECODED_SYM>>16)&0xffff),
@@ -645,11 +707,13 @@ def _install_dictionary_runtime(exe):
     assert DICT_HANDLER+len(handler)*4<=DICT_PTRS
     for i,wd in enumerate(handler): w32(DICT_HANDLER+i*4,wd)
     # Keep the exe well-formed even before install_ab_runtime runs: a bare
-    # forward to the stock slot-6 op.  install_ab_runtime overwrites this.
-    w32(AB4_HANDLER,J(STOCK6)); w32(AB4_HANDLER+4,NOP)
+    # forward to the installed stock-handler selector. install_ab_runtime
+    # overwrites this with the local dictionary continuation.
+    w32(AB4_HANDLER,J(STOCK6_SELECTOR)); w32(AB4_HANDLER+4,NOP)
     # Repurpose the (tree-unreferenced) dispatch stub 6.
     stub=STUBS+DICT_JT_INDEX*0x10
-    w32(stub+0,JAL(DICT_HANDLER)); w32(stub+4,NOP); w32(stub+8,J(EPILOGUE)); w32(stub+12,NOP)
+    w32(stub+0,JAL(DICT_HANDLER)); w32(stub+4,ADDIU(A1,ZERO,0))
+    w32(stub+8,J(EPILOGUE)); w32(stub+12,NOP)
     w32(JT+DICT_JT_INDEX*4,stub)   # already points here in the stock exe; keep explicit
     # Modes 4/5 (negotiation and the small A/B battle-fragment bank) bypass the
     # common dispatcher above and use their own jump table at AB_JT.  Slot 6 is
@@ -660,3 +724,4 @@ def _install_dictionary_runtime(exe):
             r32(AB_STUB6+8)!=J(AB_EPILOGUE) or r32(AB_STUB6+12)!=NOP):
         raise SystemExit("unexpected negotiation slot-6 dispatch stub")
     w32(AB_STUB6,JAL(DICT_HANDLER))
+    w32(AB_STUB6+4,ADDIU(A1,ZERO,1))
