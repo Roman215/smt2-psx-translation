@@ -3,6 +3,9 @@
 English strings begin with marker 0x1f and store one ASCII byte per character.  The
 printer wrapper in build.py maps each byte back to the game's existing fullwidth SJIS
 glyph before drawing, preserving the established font and proportional advances.
+The four COMP result suffixes that are appended to an already encoded demon name stay
+in fullwidth SJIS because their marker would otherwise occur in the middle of the
+combined string, where the wrapper cannot recognize it.
 
 Every translation remains in its original executable slot.  This keeps the boot-time
 memory layout untouched; apply_sys validates every encoded string against the Japanese
@@ -17,8 +20,8 @@ the generic memory-card messages.
 NOT translated (left as-is on purpose): debug text, bu00:BISLPM* memcard save-file
 identifiers, sound/VAB/SEQ dumps, single-character name-insert markers, already-English
 labels, the file-select title format tails, the superseded map-name pool (its pointer tables
-are repointed by map_names.py), and the compact race-label table (the displayed race names
-come from the translated RACES table instead).
+are repointed by map_names.py).  The compact race-label pool used by demon status screens
+is translated alongside the other name tables in build.py.
 """
 
 import struct
@@ -34,6 +37,17 @@ def _fw(s):
 
 
 ASCII_MARKER = 0x1f
+
+# The COMP copies a fullwidth demon name into a scratch buffer, then concatenates one
+# of these suffixes before making a single draw call.  Marker-prefixed ASCII is valid
+# only at the beginning of a draw string, so these fitting suffixes must use the stock
+# fullwidth encoding too.
+FULLWIDTH_SUFFIXES = {
+    0x1718,  # [name] appears.
+    0x1780,  # [name] returned
+    0x17e8,  # [name] removed.
+    0x1800,  # [name] left.
+}
 
 
 def _ascii(s):
@@ -688,9 +702,9 @@ _JP_TITLE = bytes.fromhex("905e81458f97905f935d90b68251")  # 真・女神転生�
 TITLE_FMT_OFFS = (0x1388, 0x13cc, 0x1410, 0x1454)
 
 def apply_sys(exe):
-    """Write marker-prefixed one-byte English into the original fixed slots."""
+    """Write English system text into the original fixed slots."""
     for off, (gap, en) in SYS.items():
-        data = _ascii(en)
+        data = _fw(en) + b"\0" if off in FULLWIDTH_SUFFIXES else _ascii(en)
         if len(data) > gap:
             raise SystemExit(
                 f"sys 0x{off:x} OVERFLOW {len(data)}>{gap} bytes: {en!r}")
@@ -726,5 +740,9 @@ def apply_sys(exe):
     # A build-time assertion for every audited player-facing slot. This catches a
     # future patch ordering change that might restore Japanese data after this pass.
     for off in (*SYS, *AUDITED_SYSTEM_TEXT):
-        if exe[off] != ASCII_MARKER:
+        if off in FULLWIDTH_SUFFIXES:
+            expected = _fw(SYS[off][1]) + b"\0"
+            if bytes(exe[off:off + len(expected)]) != expected:
+                raise SystemExit(f"sys audit: 0x{off:x} is not fullwidth English")
+        elif exe[off] != ASCII_MARKER:
             raise SystemExit(f"sys audit: 0x{off:x} is not marker-prefixed English")
