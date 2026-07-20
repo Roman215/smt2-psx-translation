@@ -344,6 +344,21 @@ def kern_font(slpm):
     for c in range(0x8281,0x829b): widths10[sidx(c)] = kern10(sidx(c))   # a-z
     for c in KERN_PUNCT: widths10[sidx(c)] = kern10(sidx(c))
     widths10[0] = 4  # space
+
+    # The greyed YES/NO confirm options draw ＹＥＳ/ＮＯ through the game's only
+    # 10x10 text context, where the stock heavy capitals visually matched the
+    # bold selected-option overlay.  Preserve those five stock glyphs in the
+    # unused SJIS cells 0x8259-0x825d (between '９' and 'Ａ'); the YES/NO
+    # strings are rewritten onto these cells by _patch_confirm_font.  The cells
+    # stay off every kern/width list, so they keep the stock 10px fixed
+    # advance (WTABLE10 default) and stock centering.
+    def srcbit10(k):
+        return (slpm[foff(F10) + (k >> 3)] >> (7 - (k & 7))) & 1
+    for src, dst in zip("YESNO", (0x8259, 0x825a, 0x825b, 0x825c, 0x825d)):
+        src_start = sidx(0x8260 + ord(src) - 65) * W10 * H10
+        dst_start = sidx(dst) * W10 * H10
+        for k in range(W10 * H10):
+            setbit10(dst_start + k, srcbit10(src_start + k))
     return bytes(exe), widths, widths10
 
 # ============================ 2. BUILD EXE ============================
@@ -852,6 +867,29 @@ def _patch_cathedral_race_font(exe):
         struct.pack_into("<I", exe, offset, compact_font_10)
 
 
+def _patch_confirm_font(exe):
+    """Keep the greyed YES/NO confirm options in the stock heavy style.
+
+    The YES/NO renderers (0x8003f71c/0x8003f7a8) draw both options through
+    the static text context 0x800f7484 -- the only context in the game whose
+    descriptor selects the 10x10 font.  Its stock heavy capitals visually
+    matched the bold selected-option overlay, but kern_font redraws A-Z as
+    compact 5x7 for demon-name lists, which shrank the greyed options.
+    kern_font preserves the five stock glyphs in the unused SJIS cells
+    0x8259-0x825d; retarget the ＹＥＳ/ＮＯ strings (referenced only by these
+    two renderers) onto those cells for a pixel-identical stock rendering.
+    """
+    stock_yes = bytes.fromhex("827882648272") + b"\0"  # ＹＥＳ
+    stock_no = bytes.fromhex("826d826e") + b"\0"       # ＮＯ
+    relocated_yes = bytes.fromhex("8259825a825b") + b"\0"
+    relocated_no = bytes.fromhex("825c825d") + b"\0"
+    for off, stock, relocated in ((0x1fec, stock_yes, relocated_yes),
+                                  (0x1ff4, stock_no, relocated_no)):
+        if bytes(exe[off:off + len(stock)]) != stock:
+            raise RuntimeError(f"Unexpected YES/NO string at 0x{off:x}")
+        exe[off:off + len(relocated)] = relocated
+
+
 def apply_name_tables(exe, slpm, PATHS):
     # single-level [N u16 offsets][data]: (base, list, alloc_end)
     NT.rebuild_single(exe, 0x80102962, NT.DEMONS,    0x801034da, PATHS)  # demons  (311)
@@ -870,6 +908,7 @@ def apply_name_tables(exe, slpm, PATHS):
     NT.rebuild_split(exe, 0x801034da, 0x801036da, traits, 0x801043f8, PATHS)
     _patch_compact_race_labels(exe)
     _patch_cathedral_race_font(exe)
+    _patch_confirm_font(exe)
     _patch_bar_drink_menu(exe)
 
 def _patch_bar_drink_menu(exe):
@@ -1675,6 +1714,7 @@ def main(argv=None):
     rdlogo = RD.patch_rdlogo(rdlogo0)        # boot disclaimer -> English (fullwidth, repointed)
     MT.rebuild_menu(exe, PATHS)
     SS.apply_sys(exe)                        # boot-safe system strings, kept in their original slots
+    SS.patch_composed_prompts(exe)           # one-line "Dismiss <name>?" / "Discard <item>?" confirms
     NE.apply_name_entry(exe)                 # naming-screen kana grid -> A-Z/a-z/0-9 + specials
     NE.apply_end_button(exe)                 # END button on the Z/z row; no empty-row scrolling
     print("[6/7] applying dialogue + menu banks...")

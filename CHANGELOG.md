@@ -24,6 +24,14 @@ your own verified source image.
 - Fixed garbled demon and sword selection prompts in Cathedral fusion menus.
 - Fixed excessive spacing between capital and lowercase letters in Cathedral
   party and fusion-result names.
+- Fixed garbled symbol text in the COMP demon-dismissal and item-discard
+  confirmation prompts, and in the casino's insufficient-Macca and code-entry
+  messages. The confirmations now read as natural one-line questions:
+  "Dismiss [name]?" / "Discard [item]?"
+- Restored the stock look of the greyed YES/NO confirmation options: they had
+  shrunk because their renderer shares the compact 10x10 font introduced for
+  demon-name lists. The five stock heavy glyphs are preserved in unused font
+  cells so the confirm box renders pixel-identically to the original.
 
 ## [0.1.3] - 2026-07-19
 
