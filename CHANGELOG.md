@@ -13,6 +13,11 @@ your own verified source image.
 
 ## [Unreleased]
 
+## [0.1.4] - 2026-07-20
+
+This maintenance release addresses text-rendering and menu-layout issues found
+after 0.1.3, particularly in the Cathedral, COMP, Church, and casino interfaces.
+
 ### Changed
 
 - Refined the compact party and demon-name font with balanced, half-width
@@ -21,6 +26,18 @@ your own verified source image.
 
 ### Fixed
 
+- Fixed long or repeated English name inserts overflowing the stock text
+  buffer, which could corrupt the final enemy name in large groups.
+- Fixed dictionary-expanded text being sent to the wrong message buffer during
+  streamed dialogue, which could produce garbled or overdrawn fusion-result
+  boxes.
+- Fixed the garbled Church menu exit option, recovery-item list and quantity
+  prompts, and item purchase confirmation.
+- Translated the recovery-item quantity label as "OWN" without changing its
+  compact blue-box layout.
+- Widened the name field in every casino prize inventory so long English item
+  names remain separated from their costs, and replaced the Japanese cost
+  counter with the Coin suffix "C".
 - Fixed garbled demon and sword selection prompts in Cathedral fusion menus.
 - Fixed excessive spacing between capital and lowercase letters in Cathedral
   party and fusion-result names.
@@ -124,7 +141,8 @@ First public release.
 - Reproducible build (`build.py`) that patches a verified Japan Rev 1 image
   and emits distributable xdelta patches.
 
-[Unreleased]: https://github.com/Roman215/smt2-psx-translation/compare/v0.1.3...HEAD
+[Unreleased]: https://github.com/Roman215/smt2-psx-translation/compare/v0.1.4...HEAD
+[0.1.4]: https://github.com/Roman215/smt2-psx-translation/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/Roman215/smt2-psx-translation/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/Roman215/smt2-psx-translation/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/Roman215/smt2-psx-translation/compare/v0.1.0...v0.1.1

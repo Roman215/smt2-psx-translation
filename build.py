@@ -952,6 +952,7 @@ def apply_name_tables(exe, slpm, PATHS):
     _patch_cathedral_race_font(exe)
     _patch_confirm_font(exe)
     _patch_bar_drink_menu(exe)
+    _patch_casino_prize_menu(exe)
 
 def _patch_bar_drink_menu(exe):
     """Keep English drink names and prices inside the Bar's row formatter.
@@ -986,6 +987,68 @@ def _patch_bar_drink_menu(exe):
                 f"Bar drink formatter {address:#x}: {found:#010x} != {stock:#010x}"
             )
         struct.pack_into("<I",exe,offset,replacement)
+
+
+def _patch_casino_prize_menu(exe):
+    """Give every casino prize row a safe English name/price separator.
+
+    Four prize inventories share one formatter and one 48-byte row layout.
+    Stock pads the item name to only 13 fullwidth characters, so longer
+    English names run directly into their Coin cost.  A 16-character field
+    guarantees at least one fullwidth space after every translated prize in
+    those inventories while retaining room for the formatter's six-digit
+    fallback price, the one-character Coin suffix, and the NUL terminator.
+
+    As in the Bar formatter, avoid resolving each compressed name twice.
+    Measure the completed row and reset the shared decoder scratch buffer
+    before resolving the price, preventing accumulated names from exhausting
+    it when a longer prize list is shown.
+    """
+    prize_table = foff(0x801126f2)
+    longest = (0, "")
+    for inventory in range(4):
+        relative = struct.unpack_from("<H", exe, prize_table + inventory * 2)[0]
+        cursor = prize_table + (relative & 0xfffe)
+        for _ in range(20):
+            item, price = struct.unpack_from("<HH", exe, cursor)
+            cursor += 4
+            if item == 0xff:
+                break
+            if item >= 300:
+                raise SystemExit(
+                    f"Casino prize inventory {inventory}: invalid item {item}")
+            name = NT.ITEMS[item]
+            if len(name) > longest[0]:
+                longest = (len(name), name)
+            if price != 0xffff and price > 999999:
+                raise SystemExit(
+                    f"Casino prize inventory {inventory}: price {price} is too wide")
+        else:
+            raise SystemExit(
+                f"Casino prize inventory {inventory}: missing terminator")
+    if longest[0] > 15:
+        raise SystemExit(
+            f"Casino prize {longest[1]!r} exceeds the safe 15-character field")
+
+    # address: (stock word, English replacement)
+    patches = {
+        0x80063768: (0x96050000, 0x00000000),  # remove redundant item-index load
+        0x8006376c: (0x0c01445d, 0x0c014450),  # second name lookup -> reset scratch
+        0x80063770: (0x00002021, 0x00000000),  # reset delay slot
+        0x80063778: (0x00402021, 0x02342021),  # strlen(row) instead of strlen(v0)
+        0x80063780: (0x2ca2001a, 0x2ca20020),  # 26-byte field -> 32 bytes
+        0x800637b8: (0x2ca2001a, 0x2ca20020),
+    }
+    for address, (stock, replacement) in patches.items():
+        offset = foff(address)
+        found = struct.unpack_from("<I", exe, offset)[0]
+        if found != stock:
+            raise SystemExit(
+                f"Casino prize formatter {address:#x}: "
+                f"{found:#010x} != {stock:#010x}"
+            )
+        struct.pack_into("<I", exe, offset, replacement)
+
 
 def _decode_traits(slpm):
     """Decode the 256 JP trait entries and map each to English via NT.TRAITS_MAP."""
@@ -1756,6 +1819,7 @@ def main(argv=None):
     rdlogo = RD.patch_rdlogo(rdlogo0)        # boot disclaimer -> English (fullwidth, repointed)
     MT.rebuild_menu(exe, PATHS)
     SS.apply_sys(exe)                        # boot-safe system strings, kept in their original slots
+    SS.patch_shop_composed_prompts(exe)      # English item/price confirmation grammar
     SS.patch_composed_prompts(exe)           # one-line "Dismiss <name>?" / "Discard <item>?" confirms
     NE.apply_name_entry(exe)                 # naming-screen kana grid -> A-Z/a-z/0-9 + specials
     NE.apply_end_button(exe)                 # END button on the Z/z row; no empty-row scrolling
