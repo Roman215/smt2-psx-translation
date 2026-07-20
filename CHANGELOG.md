@@ -13,6 +13,17 @@ your own verified source image.
 
 ## [Unreleased]
 
+### Changed
+
+- Refined the compact party and demon-name font with balanced, half-width
+  capitals that match its clean single-stroke lowercase letters.
+
+### Fixed
+
+- Fixed garbled demon and sword selection prompts in Cathedral fusion menus.
+- Fixed excessive spacing between capital and lowercase letters in Cathedral
+  party and fusion-result names.
+
 ## [0.1.3] - 2026-07-19
 
 This maintenance release translates another previously missed status label

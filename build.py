@@ -278,6 +278,56 @@ def kern_font(slpm):
         mask = 1 << (7-(k&7))
         if v: exe[foff(F10)+(k>>3)] |= mask
         else: exe[foff(F10)+(k>>3)] &= ~mask & 0xff
+
+    # The stock 10x10 Latin capitals use heavy two-pixel strokes while the
+    # lowercase glyphs use narrow one-pixel strokes.  Deliberate 5x7 capitals
+    # make both cases share the same body width, cap/ascender height, and
+    # stroke weight.  Hand-authored pixels also keep symmetric letters such as
+    # H balanced; proportional scaling of the wider 12x12 atlas did not.
+    capitals_5x7 = (
+        ".###./#...#/#...#/#####/#...#/#...#/#...#",  # A
+        "####./#...#/#...#/####./#...#/#...#/####.",  # B
+        ".###./#...#/#..../#..../#..../#...#/.###.",  # C
+        "####./#...#/#...#/#...#/#...#/#...#/####.",  # D
+        "#####/#..../#..../####./#..../#..../#####",  # E
+        "#####/#..../#..../####./#..../#..../#....",  # F
+        ".###./#...#/#..../#.###/#...#/#...#/.###.",  # G
+        "#...#/#...#/#...#/#####/#...#/#...#/#...#",  # H
+        "###/.#./.#./.#./.#./.#./###",                  # I
+        "..###/...#./...#./...#./#..#./#..#./.##..",  # J
+        "#...#/#..#./#.#../##.../#.#../#..#./#...#",  # K
+        "#..../#..../#..../#..../#..../#..../#####",  # L
+        "#...#/##.##/#.#.#/#.#.#/#...#/#...#/#...#",  # M
+        "#...#/##..#/##..#/#.#.#/#..##/#..##/#...#",  # N
+        ".###./#...#/#...#/#...#/#...#/#...#/.###.",  # O
+        "####./#...#/#...#/####./#..../#..../#....",  # P
+        ".###./#...#/#...#/#...#/#.#.#/#..#./.##.#",  # Q
+        "####./#...#/#...#/####./#.#../#..#./#...#",  # R
+        ".####/#..../#..../.###./....#/....#/####.",  # S
+        "#####/..#../..#../..#../..#../..#../..#..",  # T
+        "#...#/#...#/#...#/#...#/#...#/#...#/.###.",  # U
+        "#...#/#...#/#...#/#...#/.#.#./.#.#./..#..",  # V
+        "#...#/#...#/#...#/#.#.#/#.#.#/#.#.#/.#.#.",  # W
+        "#...#/#...#/.#.#./..#../.#.#./#...#/#...#",  # X
+        "#...#/#...#/.#.#./..#../..#../..#../..#..",  # Y
+        "#####/....#/...#./..#../.#.../#..../#####",  # Z
+    )
+    if len(capitals_5x7) != 26:
+        raise SystemExit("compact capital atlas must contain A-Z")
+    for code, encoded_rows in zip(range(0x8260, 0x827a), capitals_5x7):
+        rows = encoded_rows.split("/")
+        if (len(rows) != 7 or any(not 1 <= len(row) <= 5 for row in rows)
+                or any(set(row) - {".", "#"} for row in rows)):
+            raise SystemExit(f"invalid compact capital glyph {chr(code - 0x8260 + 65)}")
+        glyph_start = sidx(code) * W10 * H10
+        for y in range(H10):
+            for x in range(W10):
+                setbit10(glyph_start + y * W10 + x, 0)
+        for y, row in enumerate(rows, 1):
+            for x, pixel in enumerate(row):
+                if pixel == "#":
+                    setbit10(glyph_start + y * W10 + x, 1)
+
     def kern10(idx, left=0, sp=1):
         gb = idx*W10*H10
         rows = [[bit10(gb+y*W10+x) for x in range(W10)] for y in range(H10)]
@@ -308,7 +358,8 @@ def build_exe(font_slpm, widths, widths10, slpm):
     Rr = lambda rs,rt,rd,sa,fn: ((R[rs]&0x1f)<<21)|((R[rt]&0x1f)<<16)|((R[rd]&0x1f)<<11)|((sa&0x1f)<<6)|(fn&0x3f)
     lbu=lambda rt,o,rs:I(0x24,rs,rt,o); lhu=lambda rt,o,rs:I(0x25,rs,rt,o)
     addiu=lambda rt,rs,i:I(0x09,rs,rt,i); sltiu=lambda rt,rs,i:I(0x0b,rs,rt,i)
-    beq=lambda rs,rt,o:I(0x04,rs,rt,o); sll=lambda rd,rt,sa:Rr('zero',rt,rd,sa,0)
+    beq=lambda rs,rt,o:I(0x04,rs,rt,o); bne=lambda rs,rt,o:I(0x05,rs,rt,o)
+    sll=lambda rd,rt,sa:Rr('zero',rt,rd,sa,0)
     addu=lambda rd,rs,rt:Rr(rs,rt,rd,0,0x21); lui=lambda rt,i:I(0x0f,'zero',rt,i)
     jj=lambda t:(0x02<<26)|((t>>2)&0x03ffffff)
     lo=lambda x:x&0xffff; hi=lambda x:((x>>16)+(1 if x&0x8000 else 0))&0xffff
@@ -321,15 +372,36 @@ def build_exe(font_slpm, widths, widths10, slpm):
     for i,wd in enumerate(hook): w32(CAVE+i*4, wd)
 
     # The immediate/raw-SJIS printer at 0x80048048 has a second, independent
-    # fixed-width advance.  Status-screen equipment names use this path, so
-    # hooking only the buffered compositor above leaves an eight-glyph (96px)
-    # effective limit and lets longer names write into the following rows.
-    raw_hook=[lbu('t6',0x10,'sp'),lbu('t7',0x11,'sp'),addiu('t9','t6',-0x81),sltiu('t8','t9',2)]
-    raw_ib=len(raw_hook); raw_hook.append(0)
-    raw_hook+=[sll('t9','t9',8),addu('t9','t9','t7'),lui('t8',hi(WTABLE)),addiu('t8','t8',lo(WTABLE)),
-               addu('t8','t8','t9'),lbu('v1',0,'t8'),jj(RAW_BACK),0]
-    raw_id=len(raw_hook); raw_hook+=[lhu('v1',0,'a0'),jj(RAW_BACK),0]
-    raw_hook[raw_ib]=beq('t8','zero',((RAW_CAVE+raw_id*4)-((RAW_CAVE+raw_ib*4)+4))>>2)
+    # fixed-width advance.  It serves both the 12x12 font (equipment names)
+    # and the 10x10 font (Cathedral roster/result names).  Select the matching
+    # width table from the glyph descriptor's stock cell width; treating every
+    # raw string as 12x12 leaves conspicuous space after the compact capitals
+    # on fusion screens even though the party HUD is correctly kerned.
+    #
+    # At the hook site a0 is the glyph descriptor.  Preserve its original
+    # width in v1 as the fallback for 8px fonts and non-Latin characters.
+    raw_hook=[lhu('v1',0,'a0'),
+              lbu('t6',0x10,'sp'),lbu('t7',0x11,'sp'),
+              addiu('t9','t6',-0x81),sltiu('t8','t9',2),
+              0,                                   # beq t8,zero -> STOCK
+              addiu('t6','v1',-10),                # delay slot
+              0,                                   # bne t6,zero -> CHECK12
+              sll('t9','t9',8),                    # delay slot
+              lui('t8',hi(WTABLE10)),addiu('t8','t8',lo(WTABLE10)),
+              0,0,                                 # j COMMON; nop
+              addiu('t6','v1',-12),                # CHECK12
+              0,0,                                 # bne t6,zero -> STOCK; nop
+              lui('t8',hi(WTABLE)),addiu('t8','t8',lo(WTABLE)),
+              addu('t9','t9','t7'),                # COMMON
+              addu('t8','t8','t9'),lbu('v1',0,'t8'),jj(RAW_BACK),0,
+              jj(RAW_BACK),0]                      # STOCK
+    RAW_CHECK12, RAW_COMMON, RAW_STOCK = 13,18,23
+    raw_hook[5]=beq('t8','zero',((RAW_CAVE+RAW_STOCK*4)-((RAW_CAVE+5*4)+4))>>2)
+    raw_hook[7]=bne('zero','t6',((RAW_CAVE+RAW_CHECK12*4)-((RAW_CAVE+7*4)+4))>>2)
+    raw_hook[11]=jj(RAW_CAVE+RAW_COMMON*4)
+    raw_hook[14]=bne('zero','t6',((RAW_CAVE+RAW_STOCK*4)-((RAW_CAVE+14*4)+4))>>2)
+    if RAW_CAVE+len(raw_hook)*4 > OBJ_SCR12:
+        raise SystemExit("raw-printer VWF overlaps object-printer scratch bytes")
     for i,wd in enumerate(raw_hook): w32(RAW_CAVE+i*4, wd)
 
     tbl=bytearray([12])*512
@@ -460,7 +532,9 @@ def _patch_message_control_literals(exe, w32):
 # table with entries the decoder can never reach before laying out the (much
 # smaller) English tree, and BP.SYM_TAIL_RESERVE keeps the tree out of the
 # reservation, so [0x80118de8, 0x80119084) is never-written, never-read space.
-OBJ_SCR12, OBJ_SCR10 = 0x800d72d4, 0x800d72d5   # scratch bytes in the font cave
+# The expanded raw-printer hook now uses the font cave through 0x800d72f7.
+# Its final eight bytes remain free for these two object-printer scratch values.
+OBJ_SCR12, OBJ_SCR10 = 0x800d72f8, 0x800d72f9
 OBJ_A, OBJ_B, WTABLE10 = 0x80118de8, 0x80118e40, 0x80118e84
 SYM_END = 0x80119084                             # 0x801187a4 + 2272 (table capacity)
 
