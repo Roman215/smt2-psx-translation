@@ -5,8 +5,11 @@ authored English negotiation and battle-command fragments. Unfinished bank-4
 entries are represented by English markers rather than Japanese fallbacks.
 Each mined dictionary entry is a control-flagged Huffman leaf (struct=0xC000|6,
 symbol=0x8540+i). The slot-6 stub calls an expansion handler, which looks up the
-full string and tail-jumps the stock append routine used by name inserts. Both
-the common and negotiation-only slot-6 stubs enter that handler."""
+full string and tail-jumps the shared emit gate, which routes the string the
+same way the stock name-insert emitter (0x8005ab88) does: into the streaming
+draw buffer during streamed dialogue, through the stock append router
+otherwise. Both the common and negotiation-only slot-6 stubs enter that
+handler."""
 import struct
 import build_en_tree as ET
 
@@ -101,11 +104,43 @@ ITEM_TARGET_PROMPT_CALLS = (0x8007e9a0, 0x8007f2a8)
 # the common choice-menu handler or the negotiation handler at AB_STOCK6.
 AB_SCRIPT_DISPATCH_WRAPPER = ITEM_TARGET_PROMPT-0x18
 STOCK6_SELECTOR = AB_SCRIPT_DISPATCH_WRAPPER-0x18
+# Expansion strings must be emitted the way the stock name-insert emitter
+# (0x8005ab88) emits names.  While a dialogue box is STREAMING (byte
+# 0x801d1748 nonzero and game-state word 0x801fd8fc != 0x10 = battle), every
+# control that produces text strcpys it into the shared draw buffer
+# 0x801fd598 (256 B; next live global 0x801fd698) that the box renderer draws
+# with VWF advance this tick; the append router 0x80058244 is only correct
+# outside streaming.  Tail-jumping APPEND unconditionally queued expansions on
+# the idle fixed window context 0x800eeb58, whose consumer drew them at its
+# own stale cursor -- the garbled, overdrawn fusion-result box of 2026-07-20.
+# The gate lives with the other glue in the dead C/D STRUCT-table tail; the
+# tree-extent cap (STCAP-SYM_TAIL_RESERVE) keeps the tree clear of it.
+EMIT_GATE = STOCK6_SELECTOR-0x38
+STREAM_FLAG = 0x801d1748
+GAME_STATE = 0x801fd8fc
+DRAW_BUF = 0x801fd598
+BIOS_STRCPY = 0x800d107c               # BIOS A(0x19) strcpy thunk: (dst, src)
+# ---- Relocated name-insert accumulation buffer ------------------------------------
+# The stock 256-byte buffer at 0x801d1458 accumulates every decoded name
+# insert between page resets, and its write-cursor global at 0x801d1558 sits
+# IMMEDIATELY after it.  English names are ~40% longer than katakana: six
+# enemy names + race + group name overran the buffer, and the cursor
+# write-back stamped a pointer into the last decoded name, drawn as ASCII
+# garbage through the byte-0x20 glyph path ("Demonoid O<=  cles", 2026-07-20).
+# Relocated into the STRUCT-table tail band [tree cap, EMIT_GATE) that the
+# tree-extent assert (nxt <= STCAP-SYM_TAIL_RESERVE) guarantees the Huffman
+# tree can never reach, and grown to 504 bytes.  The cursor global stays at
+# 0x801d1558.  build.py _relocate_name_buffer patches the three code sites
+# that materialize the base; _ab_string_regions excludes the band.
+NAME_INSERT_BUF = STRUCT+STCAP-SYM_TAIL_RESERVE
+NAME_INSERT_BUF_WORDS = 0x7e           # zero-fill loop count (504 B)
+assert NAME_INSERT_BUF+NAME_INSERT_BUF_WORDS*4 <= EMIT_GATE
 
 # ---- MIPS instruction encoders (R3000) --------------------------------------------
 ZERO,V0,V1,A0,A1,T0,T1,T2=0,2,3,4,5,8,9,10
 RI=lambda op,rs,rt,imm:((op&0x3f)<<26)|((rs&0x1f)<<21)|((rt&0x1f)<<16)|(imm&0xffff)
 LUI=lambda rt,i:RI(0x0f,0,rt,i); LHU=lambda rt,o,rs:RI(0x25,rs,rt,o)
+LBU=lambda rt,o,rs:RI(0x24,rs,rt,o)
 LW=lambda rt,o,rs:RI(0x23,rs,rt,o); ADDIU=lambda rt,rs,i:RI(0x09,rs,rt,i)
 ORI=lambda rt,rs,i:RI(0x0d,rs,rt,i); SLTIU=lambda rt,rs,i:RI(0x0b,rs,rt,i)
 BEQ=lambda rs,rt,off:RI(0x04,rs,rt,off); BNE=lambda rs,rt,off:RI(0x05,rs,rt,off)
@@ -162,7 +197,7 @@ def _ab_string_regions():
     if CD_TREE_USED is None:
         raise RuntimeError("build_english_tree must run before placing A/B strings")
     return [
-        (STRUCT+CD_TREE_USED, STOCK6_SELECTOR),
+        (STRUCT+CD_TREE_USED, NAME_INSERT_BUF),
         (SYM+CD_TREE_USED, SYM+STCAP-SYM_TAIL_RESERVE),
     ]
 
@@ -243,7 +278,7 @@ def install_ab_runtime(exe):
     # Continuation handler.  Entered from the cave handler's fallthrough with
     # t1 = decoded_sym - 0x8540 still live.  Mirrors the cave handler's
     # conventions: same clobber set before the STOCK6 forward (v0/v1/t2), a0
-    # only written on the append path, lui fills the lhu load-delay slot.
+    # only written on the emit path, lui fills the lhu load-delay slot.
     L_STOCK=13
     handler=[
         ADDIU(T2,T1,-ncd),                       # t2 = sym - 0x8540 - NCD
@@ -257,7 +292,7 @@ def install_ab_runtime(exe):
         LUI(A0,hi(AB4_STRBASE)),                 # load-delay filler
         ADDIU(A0,A0,lo(AB4_STRBASE)),
         ADDU(A0,A0,V0),
-        J(APPEND),
+        J(EMIT_GATE),
         NOP,
         J(STOCK6_SELECTOR),                      # L_STOCK
         NOP,
@@ -309,6 +344,13 @@ def verify_ab_runtime(exe):
         raise SystemExit("negotiation slot-6 dictionary dispatch is corrupt")
     if r32(DICT_HANDLER+13*4)!=J(AB4_HANDLER):
         raise SystemExit("cave handler does not fall through to the A/B continuation")
+    if r32(DICT_HANDLER+11*4)!=J(EMIT_GATE):
+        raise SystemExit("cave handler does not emit through the streaming gate")
+    if r32(AB4_HANDLER+11*4)!=J(EMIT_GATE):
+        raise SystemExit("A/B continuation does not emit through the streaming gate")
+    for i,word in enumerate(_emit_gate_words()):
+        if r32(EMIT_GATE+4*i)!=word:
+            raise SystemExit("dictionary emit gate is corrupt")
     # SLTIU(V0,T2,NAB) is the continuation's second word; its imm16 must match.
     if _AB_LOCAL_ENTRIES and r16(AB4_HANDLER+4)!=len(_AB_LOCAL_ENTRIES):
         raise SystemExit("A/B continuation handler range check is stale")
@@ -371,6 +413,37 @@ def _stock6_selector_words():
         J(STOCK6),
         NOP,
     ]
+
+def _emit_gate_words():
+    """Emit an expansion string (a0) the way the stock name emitter does.
+
+    Streaming dialogue (STREAM_FLAG set, game state != 0x10): strcpy into the
+    shared draw buffer; the streaming box renderer draws the whole buffer this
+    tick with VWF advance, exactly as it draws an inserted demon name.
+    Otherwise: the stock append router.  Entered by J with ra still at the
+    dispatch stub's continuation, so both BIOS_STRCPY and APPEND return
+    through the correct caller epilogue.  Branch delay slots are harmless on
+    both paths (v1 is dead after each test; APPEND overwrites a1 first thing)
+    and every load is consumed two slots later (R3000 load delay).
+    """
+    L_APP=11
+    words=[
+        LUI(V0,(STREAM_FLAG>>16)&0xffff),
+        LBU(V1,STREAM_FLAG&0xffff,V0),           # v1 = streaming flag
+        LUI(V0,hi(GAME_STATE)),                  # load-delay filler
+        BEQ(V1,ZERO,L_APP-4),                    # not streaming -> append
+        LW(V1,lo(GAME_STATE),V0),                # (delay slot) v1 = game state
+        ORI(T2,ZERO,0x10),                       # load-delay filler
+        BEQ(V1,T2,L_APP-7),                      # battle -> append
+        ADDU(A1,A0,ZERO),                        # (delay slot) a1 = source
+        LUI(T2,hi(DRAW_BUF)),
+        J(BIOS_STRCPY),
+        ADDIU(A0,T2,lo(DRAW_BUF)),               # (delay slot) a0 = draw buffer
+        J(APPEND),                               # L_APP
+        NOP,
+    ]
+    assert EMIT_GATE+len(words)*4<=STOCK6_SELECTOR
+    return words
 
 def _item_target_prompt_blob():
     blob=bytearray()
@@ -676,9 +749,10 @@ def _install_dictionary_runtime(exe):
     exe[_foff(strs_base):_foff(strs_base)+len(blob)]=blob
     # Handler.  CRITICAL: jump-table slot 6 is NOT free at runtime -- it is the
     # event-script CHOICE-MENU op.  The raw interpreter is guarded above, but
-    # keep both dictionary range checks defensive: dict codes take the append
-    # path and anything else falls through to the caller's stock slot-6 handler.
-    #   a0 = DICT_PTRS[decoded_sym - 0x8540]; tail-jump the stock append.
+    # keep both dictionary range checks defensive: dict codes take the emit
+    # gate and anything else falls through to the caller's stock slot-6 handler.
+    #   a0 = DICT_PTRS[decoded_sym - 0x8540]; tail-jump the emit gate, which
+    # picks the streaming draw buffer or the stock append per context.
     # ori fills the R3000 lhu load-delay slot before v1 is consumed, and
     # subtracting DICT_CODE_BASE first keeps every immediate in range.
     # Codes past the C/D window fall through to the continuation at AB4_BASE,
@@ -699,13 +773,14 @@ def _install_dictionary_runtime(exe):
         ADDIU(V0,V0,lo(DICT_PTRS)),
         ADDU(V0,V0,V1),
         LW(A0,0,V0),
-        J(APPEND),
+        J(EMIT_GATE),
         NOP,
         J(AB4_HANDLER),                          # L_STOCK: ra still = stub+8
         NOP,
     ]
     assert DICT_HANDLER+len(handler)*4<=DICT_PTRS
     for i,wd in enumerate(handler): w32(DICT_HANDLER+i*4,wd)
+    for i,wd in enumerate(_emit_gate_words()): w32(EMIT_GATE+i*4,wd)
     # Keep the exe well-formed even before install_ab_runtime runs: a bare
     # forward to the installed stock-handler selector. install_ab_runtime
     # overwrites this with the local dictionary continuation.

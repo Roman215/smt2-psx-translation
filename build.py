@@ -447,6 +447,7 @@ def build_exe(font_slpm, widths, widths10, slpm):
     _install_sys_printer(exe, w32)
     _patch_message_control_literals(exe, w32)
     _relocate_bank7_base(exe, w32)
+    _relocate_name_buffer(exe, w32)
     return exe
 
 
@@ -648,6 +649,47 @@ def _relocate_bank7_base(exe, w32):
     w32(SEEK_B7_LUI,   0x3c040000 | hi)                  # lui   $a0, hi
     w32(SEEK_B7_ADDIU, 0x24870000 | lo)                  # addiu $a3, $a0, lo
     w32(SEEK_B7_LHU,   0x94830000 | lo)                  # lhu   $v1, lo($a0)
+
+def _relocate_name_buffer(exe, w32):
+    """Move the name-insert accumulation buffer out of 0x801d1458.
+
+    The stock buffer is 256 bytes and its write-cursor global at 0x801d1558 is
+    the very next word.  Decoded name inserts accumulate here between page
+    resets; English names are longer than katakana, so a six-demon enemy group
+    ("Demonoid Oracles" x6) overruns the buffer and the cursor write-back then
+    stamps a pointer into the last decoded name -- the bytes render as ASCII
+    garbage through the glyph path's byte-0x20 fallback (the fusion-era
+    "composed-prompt" garble signature, seen 2026-07-20 as "Demonoid O<= cles").
+
+    The buffer moves to BP.NAME_INSERT_BUF (504 B) in the C/D STRUCT-table
+    tail band that the tree-extent cap keeps free of Huffman nodes; the cursor
+    global stays at 0x801d1558, no longer adjacent to the text.  Three code
+    sites materialize the base -- the reset fn 0x80051140 (whose zero loop
+    grows to the new size), the draw/name text-state clear at 0x80056928, and
+    the page-clear handler's batch reset at 0x80059b28 -- and a data-pointer
+    scan of the exe finds no other reference to 0x801d1458.
+    """
+    hi = (BP.NAME_INSERT_BUF >> 16) + (1 if BP.NAME_INSERT_BUF & 0x8000 else 0)
+    lo = BP.NAME_INSERT_BUF & 0xffff
+    for addr, expect in ((0x80051140, 0x3c02801d),   # lui   $v0, 0x801d
+                         (0x80051144, 0x24451458),   # addiu $a1, $v0, 0x1458
+                         (0x80051158, 0x2c820040),   # sltiu $v0, $a0, 0x40
+                         (0x80051164, 0x24631458),   # addiu $v1, $v1, 0x1458
+                         (0x80056940, 0x3c03801d),   # lui   $v1, 0x801d
+                         (0x80056944, 0x24651458),   # addiu $a1, $v1, 0x1458
+                         (0x80059b1c, 0x3c02801d),   # lui   $v0, 0x801d
+                         (0x80059b28, 0x24421458)):  # addiu $v0, $v0, 0x1458
+        got = struct.unpack_from("<I", exe, foff(addr))[0]
+        if got != expect:
+            raise SystemExit(f"name-buffer site {addr:#x}: expected {expect:#010x}, got {got:#010x}")
+    w32(0x80051140, 0x3c020000 | hi)                 # lui   $v0, hi
+    w32(0x80051144, 0x24450000 | lo)                 # addiu $a1, $v0, lo
+    w32(0x80051158, 0x2c820000 | BP.NAME_INSERT_BUF_WORDS)
+    w32(0x80051164, 0x24630000 | lo)                 # addiu $v1, $v1, lo
+    w32(0x80056940, 0x3c030000 | hi)                 # lui   $v1, hi
+    w32(0x80056944, 0x24650000 | lo)                 # addiu $a1, $v1, lo
+    w32(0x80059b1c, 0x3c020000 | hi)                 # lui   $v0, hi
+    w32(0x80059b28, 0x24420000 | lo)                 # addiu $v0, $v0, lo
 
 def _apply_lowercase_font(exe):
     """Draw lowercase a-z into the 8x10 halfwidth font's a-z glyph slots (idx 0x41-0x5a).
