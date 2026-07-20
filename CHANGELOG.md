@@ -17,6 +17,7 @@ your own verified source image.
 
 - Refined the compact party and demon-name font with balanced, half-width
   capitals that match its clean single-stroke lowercase letters.
+- Matched the race and demon-name typography in Cathedral fusion lists.
 
 ### Fixed
 
