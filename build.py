@@ -725,6 +725,22 @@ def _install_sys_printer(exe, w32):
 _COMPACT_RACE_POOL_START = 0x80011f9c
 _COMPACT_RACE_POOL_END = 0x80012128
 _COMPACT_RACE_PTR_TABLES = (0x800f77b0, 0x800f7860)
+# Cathedral row renderers select the 12x12 font for the race column, then the
+# compact 10x10 font for the demon-name column.  The mixed sizes make the race
+# look like a second heading instead of part of the same row.  Keep this local
+# to fusion: status screens still use the larger race label intentionally.
+_CATHEDRAL_RACE_FONT_SITES = (
+    0x8008ddfc,
+    0x8008e5d4,
+    0x8008e95c,
+    0x8008ea80,  # fusion result race
+    0x8008ed0c,
+    0x8008ef64,
+    0x8008f328,
+    0x8008f418,  # alternate fusion result race
+    0x8008f9f0,
+    0x800902c8,
+)
 SPELL_DESCRIPTION_START = 160
 SPELL_DESCRIPTION_MAX_PIXELS = 124
 _COMPACT_RACE_PRIMARY_PTRS = (
@@ -814,6 +830,28 @@ def _patch_compact_race_labels(exe):
         exe[table_off:table_off + len(packed_pointers)] = packed_pointers
 
 
+def _patch_cathedral_race_font(exe):
+    """Draw fusion-list race and demon names with the same compact font.
+
+    Enlarging demon names to 12x12 looks tempting, but the narrowest Cathedral
+    NAME column is only wide enough for the existing 10x10 text; fifteen valid
+    demon names would overrun it at 12x12.  Switching just the Cathedral race
+    selectors from font 8 (12x12) to font 4 (10x10) gives the rows consistent
+    typography without changing party, battle, or demon-status rendering.
+    """
+    stock_font_12 = 0x24050008  # addiu a1, zero, 8
+    compact_font_10 = 0x24050004  # addiu a1, zero, 4
+    for address in _CATHEDRAL_RACE_FONT_SITES:
+        offset = foff(address)
+        actual = struct.unpack_from("<I", exe, offset)[0]
+        if actual != stock_font_12:
+            raise RuntimeError(
+                f"Unexpected Cathedral race-font selector at 0x{address:08x}: "
+                f"0x{actual:08x}"
+            )
+        struct.pack_into("<I", exe, offset, compact_font_10)
+
+
 def apply_name_tables(exe, slpm, PATHS):
     # single-level [N u16 offsets][data]: (base, list, alloc_end)
     NT.rebuild_single(exe, 0x80102962, NT.DEMONS,    0x801034da, PATHS)  # demons  (311)
@@ -831,6 +869,7 @@ def apply_name_tables(exe, slpm, PATHS):
     traits = _decode_traits(slpm)
     NT.rebuild_split(exe, 0x801034da, 0x801036da, traits, 0x801043f8, PATHS)
     _patch_compact_race_labels(exe)
+    _patch_cathedral_race_font(exe)
     _patch_bar_drink_menu(exe)
 
 def _patch_bar_drink_menu(exe):
