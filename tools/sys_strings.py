@@ -56,6 +56,9 @@ FULLWIDTH_SYSTEM_TEXT = {
     0x1800,  # [name] left.
     0x1eec,  # casino, short on Macca (あら　£が　足りないわ; follows γ marker)
     0x1f0c,  # casino code entry prompt (コードを入力せよ：; follows ζ marker)
+    0x2308,  # church/shop leave option (drawn by the object compositor)
+    0x3df0,  # Church exit label (copied as a fixed nine-byte object string)
+    0x3fd8,  # casino prize-cost suffix (appended to a fullwidth row)
     0x52bc,  # First demon?
     0x52d8,  # Next demon?
     0x52f0,  # Final demon?
@@ -66,6 +69,11 @@ FULLWIDTH_SYSTEM_TEXT = {
     0x537c,  # Second sword?
     0x53e4,  # This one?
     0x53fc,  # Fuse now!
+    0x5708,  # church recovery-item prompt (composed after control markers)
+    0x5820,  # Church recovery-item quantity prompt (object compositor)
+    0x5854,  # Church recovery-item prompt used by the Messian item seller
+    0x61ac,  # Church purchase-confirmation suffix (appended after item/price)
+    0x66cc,  # shop quantity-owned label (object compositor; stock αβγ glyph aliases)
 }
 
 
@@ -465,10 +473,11 @@ AUDITED_SYSTEM_TEXT = {
     0x3200: "Message speed settings.",
     0x3224: "Auto-Battle settings.",
     0x3a90: "Which slot?",
-    0x3df0: "Go outside",
+    0x3df0: "Exit",
     0x3f2c: "Lucky Khan",
     0x3f40: "Mr. DNA",
     0x3f50: "Timing X",
+    0x3fd8: "C",                           # Coins; stock Japanese counter is 枚
 
     # The third field-item target prompt at file offset 0x4e5c is not listed
     # here: its callers append SJIS directly and bypass the marker-aware system
@@ -526,7 +535,7 @@ AUDITED_SYSTEM_TEXT = {
     0x56b4: "That's the total. Okay?",
     0x56d0: "How many?",
     0x56e4: "We sell recovery items, too!",
-    0x5708: "Which one?",
+    0x5708: "Choose:",
 
     0x571c: "You're short on cash.",
     0x5734: "You can't carry any more.",
@@ -543,7 +552,7 @@ AUDITED_SYSTEM_TEXT = {
     0x5804: "Your offering is lacking.",
     0x5820: "How many?",
     0x5834: "Return whenever you have need.",
-    0x5854: "Which one?",
+    0x5854: "Choose:",
 
     0x5868: "Can't equip it. Still buy?",
     0x5884: "You aren't in any state to shop.",
@@ -633,7 +642,7 @@ AUDITED_SYSTEM_TEXT = {
     0x6160: "You need more cash.",
     0x617c: "Inventory is full.",
     0x6194: "Equip it right away?",
-    0x61ac: "That is the total. Okay?",
+    0x61ac: "Buy it?",
     0x61c8: "How many?",
     0x61dc: "Thank you very much.",
     0x61f4: "What will you sell?",
@@ -682,6 +691,7 @@ AUDITED_SYSTEM_TEXT = {
     0x6658: "Nothing I can buy. Bring me something worthwhile.",
     0x6694: "What will you buy?",
     0x66a8: "Weapon Shop: Welcome.",
+    0x66cc: "OWN",                        # αβγ aliases render as 所持数 (quantity owned)
 
     # Equipment comparison and a small shop reward sequence.
     0x6700: "Attack",
@@ -824,3 +834,23 @@ def patch_composed_prompts(exe):
                 f"composed prompt code at 0x{address:08x}: "
                 f"expected 0x{expected:08x}, found 0x{actual:08x}")
         struct.pack_into("<I", exe, off, replacement)
+
+
+_JP_SHOP_TOPIC_PARTICLE = bytes.fromhex("82cd0000")  # は + slot padding
+
+
+def patch_shop_composed_prompts(exe):
+    """Remove Japanese grammar left between an English item name and price.
+
+    The purchase-confirmation composer builds: ζ, item name, は, δ, currency,
+    price, space, and a shopkeeper-specific suffix.  English does not need the
+    topic particle; the suffix itself is kept fullwidth because it is appended
+    after the control and dynamic fields.
+    """
+    off = 0x67ac
+    actual = bytes(exe[off:off + len(_JP_SHOP_TOPIC_PARTICLE)])
+    if actual != _JP_SHOP_TOPIC_PARTICLE:
+        raise SystemExit(
+            f"shop confirmation 0x{off:x}: unexpected topic-particle slot")
+    exe[off:off + len(_JP_SHOP_TOPIC_PARTICLE)] = bytes(
+        len(_JP_SHOP_TOPIC_PARTICLE))
