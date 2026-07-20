@@ -42,11 +42,20 @@ ASCII_MARKER = 0x1f
 # marker at the beginning of a draw string.  The COMP concatenates its suffix after a
 # fullwidth name, while the Cathedral prompts use the object renderer directly.  Keep
 # both groups in compact, fitting fullwidth English on their stock paths.
+# The same applies to every slot the prompt composer (append fn 0x8002ad00) adds after
+# a leading marker slot (ζ/γ/δ/name-insert): the marker byte lands mid-string, the
+# stock per-byte glyph lookup maps ASCII into fullwidth symbol slots, and the text
+# renders as '＝≦｝￥' garbage.  All composed slots were found by auditing every
+# jal 0x8002ad00 call site.  The demon-dismiss and item-discard confirmations are
+# handled separately by patch_composed_prompts, which restructures them into
+# single-line questions.
 FULLWIDTH_SYSTEM_TEXT = {
     0x1718,  # [name] appears.
     0x1780,  # [name] returned
     0x17e8,  # [name] removed.
     0x1800,  # [name] left.
+    0x1eec,  # casino, short on Macca (あら　£が　足りないわ; follows γ marker)
+    0x1f0c,  # casino code entry prompt (コードを入力せよ：; follows ζ marker)
     0x52bc,  # First demon?
     0x52d8,  # Next demon?
     0x52f0,  # Final demon?
@@ -146,7 +155,7 @@ SYS = {
     0x1764: (24, "Return who?"),          # どの悪魔を戻しますか？
     0x1780: (20, " to COMP"),             # ...はＣＯＭＰに戻った   ([name] precedes)
     0x179c: (24, "Part with?"),           # どの悪魔と別れますか？
-    0x17cc: (20, "Confirm?"),             # よろしいですか？
+    # 0x17cc よろしいですか？ is rebuilt by patch_composed_prompts (demon dismissal)
     0x17e8: (24, " discarded"),           # ...の死体を捨てました   ([name] precedes)
     0x1800: (16, " parted"),              # ...と別れました   ([name] precedes)
     0x182c: (28, "Analyze who?"),         # どの悪魔を解析しますか？
@@ -176,7 +185,7 @@ SYS = {
     0x1b1c: (36, "Pick item to move"),    # 移動元のアイテムを選択してください
     0x1b40: (36, "Pick destination"),     # 移動先のアイテムを選択してください
     0x1b64: (32, "Drop which?"),          # どのアイテムを　捨てますか？
-    0x1b9c: (20, "Confirm?"),             # よろしいですか？
+    # 0x1b9c よろしいですか？ is rebuilt by patch_composed_prompts (item discard)
     0x1558: (24, "Is this OK?"),          # これでよろしいですか？ (sits after a ptr table, no NUL before)
     0x1c60: (24, "Cursed!"),              # 呪いで装備が外せません
     0x1c78: (32, "Item bag full"),        # アイテムがいっぱいで外せません
@@ -263,7 +272,6 @@ RETRANSLATED = {
     0x1764: "Send back?",                 # どの悪魔を戻しますか？
     0x1780: " returned",                  # [name]はCOMPに戻った
     0x179c: "Who leaves?",                # どの悪魔と別れますか？
-    0x17cc: "Proceed?",                   # よろしいですか？
     0x17e8: " removed.",                  # [name]の死体を捨てました
     0x1800: " left.",                     # [name]と別れました
     0x182c: "Analyze whom?",              # どの悪魔を解析しますか？
@@ -293,7 +301,6 @@ RETRANSLATED = {
     0x1b1c: "Move which item?",           # 移動元のアイテムを選択してください
     0x1b40: "Move it where?",             # 移動先のアイテムを選択してください
     0x1b64: "Discard what?",              # どのアイテムを捨てますか？
-    0x1b9c: "Proceed?",                   # よろしいですか？
     0x1c60: "The curse prevents you from removing it.",
     0x1c78: "Inventory full. It cannot be removed.",
     0x1c98: "You have nothing this character can equip.",
@@ -311,8 +318,8 @@ RETRANSLATED = {
     0x1e64: "Open the Config menu.",       # 設定メニューを起動します
     0x1e80: "Load save data.",             # セーブデータをロードします
     0x1e9c: "Create suspend data.",        # 中断セーブを行います
-    0x1eec: "Oh, you're short on ћ.",       # あら ћが足りないわ
-    0x1f0c: "Enter:",                     # コードを入力せよ：
+    0x1eec: "Short on ћ.",                # あら ћが足りないわ (fullwidth; 24-byte slot)
+    0x1f0c: "Enter:",                     # コードを入力せよ： (fullwidth; follows ζ)
     0x201c: "Use it on whom?",            # 誰に使いますか？
     0x2308: "Leave",                      # 店を出る
 
@@ -412,9 +419,9 @@ for _off, _english in ASCII_FIT_ENGLISH.items():
 # Keeping this separate from SYS makes the original hand-measured table above stable.
 AUDITED_SYSTEM_TEXT = {
     # Missed short error and the remainder of the System/Config help tables.
-    0x17bc: " leaves.",
+    # (0x17bc/0x1b8c, the composed-confirm suffixes, are rebuilt by
+    # patch_composed_prompts.)
     0x1964: "Short on cash",
-    0x1b8c: " discarded",
     0x231c: "Spirits",
     0x2c40: "Analyze defeated demons.",
     0x2c60: "Auto-Recover the entire party.",
@@ -757,3 +764,63 @@ def apply_sys(exe):
                 raise SystemExit(f"sys audit: 0x{off:x} is not fullwidth English")
         elif exe[off] != ASCII_MARKER:
             raise SystemExit(f"sys audit: 0x{off:x} is not marker-prefixed English")
+
+
+# The demon-dismissal and item-discard confirmations are composed by dedicated
+# functions that append fixed exe slots around the name:
+#   dismiss (0x80030614): ζ, name-marker 0x8762, roster name, と別れます, δ, よろしいですか？
+#   discard (0x80033190): ζ, item name, を捨てます, δ, よろしいですか？
+# Japanese puts the name first, so a natural one-line English question needs its
+# verb BEFORE the name.  The composer references every slot with its own
+# lui/addiu pair, so the first append is repointed at the roomy 20-byte
+# よろしいですか？ slot, rebuilt as the ζ marker plus the fullwidth verb; the old
+# 12-byte suffix slot keeps only the closing "？"; and the δ line break plus the
+# second-line append are removed.  Result: "Dismiss <name>?" / "Discard <item>?"
+_RAM_BASE = 0x8000f800  # exe file offset 0 loads at this address
+_APPEND_JAL = 0x0C00AB40  # jal 0x8002ad00
+_NOP = 0x00000000
+
+def _composed(marker, verb):
+    return bytes(marker) + _fw(verb) + b"\0"
+
+_JP_SUFFIX_WAKARE = bytes.fromhex("82c695ca82ea82dc82b7") + b"\0"  # と別れます
+_JP_SUFFIX_SUTERU = bytes.fromhex("82f08ecc82c482dc82b7") + b"\0"  # を捨てます
+_JP_YOROSHII = bytes.fromhex("82e682eb82b582a282c582b782a98148") + b"\0"  # よろしいですか？
+
+# (slot file offset, slot byte gap, expected untouched Japanese, replacement)
+_COMPOSED_SLOTS = (
+    (0x17bc, 12, _JP_SUFFIX_WAKARE, _fw("?") + b"\0"),
+    (0x17cc, 20, _JP_YOROSHII, _composed(b"\x83\xc4", "Dismiss ")),  # ζ + verb
+    (0x1b8c, 12, _JP_SUFFIX_SUTERU, _fw("?") + b"\0"),
+    (0x1b9c, 20, _JP_YOROSHII, _composed(b"\x83\xc4", "Discard ")),  # ζ + verb
+)
+
+# (instruction address, expected stock word, replacement word)
+_COMPOSED_CODE = (
+    # demon dismissal: first append ζ 0x17b4 -> combo slot 0x17cc; drop δ + line 2
+    (0x8003061c, 0x24840FB4, 0x24840FCC),  # addiu a0, a0, 0xfb4 -> 0xfcc
+    (0x8003067C, _APPEND_JAL, _NOP),       # append δ
+    (0x80030688, _APPEND_JAL, _NOP),       # append よろしいですか？
+    # item discard: first append ζ 0x1b88 -> combo slot 0x1b9c; drop δ + line 2
+    (0x800331C4, 0x24841388, 0x2484139C),  # addiu a0, a0, 0x1388 -> 0x139c
+    (0x80033200, _APPEND_JAL, _NOP),       # append δ
+    (0x8003320C, _APPEND_JAL, _NOP),       # append よろしいですか？
+)
+
+
+def patch_composed_prompts(exe):
+    """Rebuild the dismiss/discard confirmations as one-line questions."""
+    for off, gap, expected_jp, data in _COMPOSED_SLOTS:
+        if bytes(exe[off:off + len(expected_jp)]) != expected_jp:
+            raise SystemExit(f"composed prompt 0x{off:x}: unexpected slot content")
+        if len(data) > gap:
+            raise SystemExit(f"composed prompt 0x{off:x} OVERFLOW {len(data)}>{gap}")
+        exe[off:off + gap] = data + bytes(gap - len(data))
+    for address, expected, replacement in _COMPOSED_CODE:
+        off = address - _RAM_BASE
+        actual = struct.unpack_from("<I", exe, off)[0]
+        if actual != expected:
+            raise SystemExit(
+                f"composed prompt code at 0x{address:08x}: "
+                f"expected 0x{expected:08x}, found 0x{actual:08x}")
+        struct.pack_into("<I", exe, off, replacement)
