@@ -32,19 +32,23 @@ AB_MENU_DATA_REFS={
 }
 AB_MENU_END_TOKEN=(0x8140,True,0x0f)
 
-# The common 1-4-row dialogue-choice window is also used by demon negotiation.
-# Stock gives it a 128px box and only 120px for text/highlight, which clips the
-# longer English responses.  Keep the box centered at x=160 while expanding it
-# to 200px; four pixels of padding on each side leave a 192px text region.
+# Demon negotiation uses the first group of the common 1-4-row choice-window
+# descriptors.  Stock presents it as a small floating box, which both clips
+# long English responses and leaves an awkward amount of the underlying full
+# dialogue box visible.  Restyle it as a fixed lower response panel aligned to
+# that dialogue box's inner rectangle (x=16..304, bottom=224).  This mirrors the
+# battle UI's illusion of a short prompt panel sitting above a covering overlay;
+# menus with fewer than four choices simply leave unused space in the response
+# panel instead of changing its outer height.
 #
-# Some reachable negotiation prompts occupy two dialogue rows.  Stock starts
-# the response window immediately after the first row, so move the complete UI
-# down by one 13px dialogue row: frame, text surface, glyphs, and highlight.
-AB_MENU_WINDOW_LEFT=60
-AB_MENU_WINDOW_RIGHT=260
+# Some reachable prompts occupy two dialogue rows, so the panel begins one 13px
+# row below stock.  Move its frame, text surface, glyphs, and highlight together.
+AB_MENU_WINDOW_LEFT=16
+AB_MENU_WINDOW_RIGHT=304
 AB_MENU_WINDOW_TOP=166
-AB_MENU_TEXT_X=64
-AB_MENU_TEXT_WIDTH=192
+AB_MENU_WINDOW_BOTTOM=224
+AB_MENU_TEXT_X=20
+AB_MENU_TEXT_WIDTH=280
 AB_MENU_TEXT_Y0=168
 AB_MENU_STOCK_WINDOW_LEFT=96
 AB_MENU_STOCK_WINDOW_RIGHT=224
@@ -55,10 +59,11 @@ AB_MENU_STOCK_TEXT_Y0=155
 # The labels are rendered into a separate 128x52 object surface whose stock
 # screen origin is (96,153).  Each row begins with a raw ``mu 4,y`` position
 # command, so the visible glyph origin is surface_x+4.  Move and enlarge the
-# surface along with the window; changing only the selection rectangles leaves
-# the glyphs at their stock x=100 position and leaves the backing bitmap narrow.
+# surface along with the window, but do not exceed 256px: PSX texture U
+# coordinates are 8-bit, and a 288px surface repeats its first 32px at the far
+# right.  The widest English label is well below the remaining 252px glyph area.
 AB_MENU_SURFACE_X=AB_MENU_WINDOW_LEFT
-AB_MENU_SURFACE_WIDTH=AB_MENU_WINDOW_RIGHT-AB_MENU_WINDOW_LEFT
+AB_MENU_SURFACE_WIDTH=256
 AB_MENU_SURFACE_Y=AB_MENU_WINDOW_TOP
 AB_MENU_STOCK_SURFACE_X=AB_MENU_STOCK_WINDOW_LEFT
 AB_MENU_STOCK_SURFACE_WIDTH=AB_MENU_STOCK_WINDOW_RIGHT-AB_MENU_STOCK_WINDOW_LEFT
@@ -179,11 +184,16 @@ def verify_ab_menu_layout(exe):
     def u16(address): return struct.unpack_from("<H",exe,_foff(address))[0]
     for address,stock_bottom in AB_MENU_WINDOW_RECTS:
         got=tuple(u16(address+2*field) for field in range(4))
+        bottom=(
+            AB_MENU_WINDOW_TOP
+            if stock_bottom==AB_MENU_STOCK_WINDOW_TOP
+            else AB_MENU_WINDOW_BOTTOM
+        )
         want=(
             AB_MENU_WINDOW_LEFT,
             AB_MENU_WINDOW_TOP,
             AB_MENU_WINDOW_RIGHT,
-            stock_bottom+(AB_MENU_WINDOW_TOP-AB_MENU_STOCK_WINDOW_TOP),
+            bottom,
         )
         if got!=want:
             raise SystemExit(f"A/B choice window {address:#x}: {got!r} != {want!r}")
@@ -214,10 +224,11 @@ def verify_ab_menu_layout(exe):
                 f"{got} != {AB_MENU_SURFACE_WIDTH}"
             )
     widest,index,text=widest_ab_menu_entry(exe)
-    if widest>AB_MENU_TEXT_WIDTH:
+    available=min(AB_MENU_TEXT_WIDTH,AB_MENU_SURFACE_WIDTH-4)
+    if widest>available:
         raise SystemExit(
             f"A/B menu {index} {text!r} is {widest}px, wider than "
-            f"the {AB_MENU_TEXT_WIDTH}px choice region"
+            f"the {available}px choice-text region"
         )
     _verify_ab_menu_sentence_case()
 
@@ -238,7 +249,12 @@ def patch_ab_menu_layout(exe):
         w16(address,AB_MENU_WINDOW_LEFT)
         w16(address+2,AB_MENU_WINDOW_TOP)
         w16(address+4,AB_MENU_WINDOW_RIGHT)
-        w16(address+6,stock_bottom+(AB_MENU_WINDOW_TOP-AB_MENU_STOCK_WINDOW_TOP))
+        w16(
+            address+6,
+            AB_MENU_WINDOW_TOP
+            if stock_bottom==AB_MENU_STOCK_WINDOW_TOP
+            else AB_MENU_WINDOW_BOTTOM,
+        )
     for row,address in enumerate(AB_MENU_TEXT_ROWS):
         got=tuple(u16(address+2*field) for field in range(4))
         want=(AB_MENU_STOCK_TEXT_X,AB_MENU_STOCK_TEXT_Y0+12*row,AB_MENU_STOCK_TEXT_WIDTH,12)
