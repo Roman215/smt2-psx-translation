@@ -27,7 +27,14 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "tools"))
 
-from menu_table import AB_MENU  # noqa: E402
+import build_en_tree as ET  # noqa: E402
+import name_tables as NT  # noqa: E402
+from menu_table import (  # noqa: E402
+    AB_MENU,
+    AB_MENU_OT,
+    AB_MENU_STOCK_DATA,
+    N_AB_MENU,
+)
 from translations import TRANS  # noqa: E402
 
 
@@ -63,13 +70,25 @@ FIXED_MESSAGE_OPS = set(range(0x61, 0x6A)) | {0x6C}
 DYNAMIC_NAMES = {
     "AG": "<actor>", "MG": "<demon>", "SY": "<speaker>",
     "SN": "<name>", "IT": "<item>", "PP": "<stat>",
-    "Fe": "<number>",
+    "Fe": "<number>", "A62": "<item>", "A63": "<demon>",
+    "A64": "<race>", "A6B": "<party member>", "A6E": "<party member>",
+    "A6F": "<player name>",
 }
 DISPLAY_CONTROLS = {"CR": " / ", "A65": " / ", "A67": " / "}
 IGNORED_CONTROLS = {
     "ED", "WT", "PG", "A0E", "A0F", "A14", "A61", "A62", "A63",
     "A64", "A65", "A66", "A67", "A68", "A69", "A6B", "A6E", "A6F",
 }
+
+FONT12_ADDRESS = 0x800D4188
+FONT12_WIDTH = 12
+FONT12_HEIGHT = 12
+FONT12_BYTES = 18
+# The dialogue renderer reserves a stock 12px cell for its next-character
+# lookahead even though the English glyphs advance proportionally.  Keeping
+# rendered ink at or below 260px is therefore the conservative safe width for
+# the 272px dialogue surface (see build.py's line-break patch).
+PROMPT_SAFE_WIDTH = 260
 
 
 @dataclass(frozen=True)
@@ -272,10 +291,10 @@ def render_translation(message: int) -> str:
         if isinstance(token, str):
             if token in DISPLAY_CONTROLS:
                 result.append(DISPLAY_CONTROLS[token])
-            elif token in IGNORED_CONTROLS or token.startswith("A") and token[1:].isalnum():
-                continue
             elif token in DYNAMIC_NAMES:
                 result.append(DYNAMIC_NAMES[token])
+            elif token in IGNORED_CONTROLS or token.startswith("A") and token[1:].isalnum():
+                continue
             else:
                 result.append(token)
         elif isinstance(token, tuple):
@@ -295,6 +314,148 @@ def load_japanese(path: Path) -> dict[int, str]:
         if match:
             messages[int(match.group(1), 16)] = match.group(2)
     return messages
+
+
+def decode_stock_ab_menu(executable: bytes) -> tuple[str, ...]:
+    """Decode the original Japanese negotiation labels from the A/B tree."""
+    def u16(address: int) -> int:
+        return struct.unpack_from("<H", executable, file_offset(address))[0]
+
+    labels = []
+    for index in range(N_AB_MENU):
+        position = AB_MENU_STOCK_DATA + u16(AB_MENU_OT + 2 * index)
+        high_nibble = True
+        node = 0
+        encoded = bytearray()
+        for _step in range(1000):
+            packed = executable[file_offset(position)]
+            nibble = packed >> 4 if high_nibble else packed & 0x0F
+            high_nibble = not high_nibble
+            if high_nibble:
+                position += 1
+            entry = (node & 0xFFFE) + 2 * nibble
+            descriptor = u16(0x8010130C + entry)
+            if descriptor == 0x7FFF:
+                raise ValueError(f"invalid A/B branch in menu entry {index}")
+            if descriptor & 0x8000:
+                symbol = u16(0x80101978 + entry)
+                if descriptor & 0x4000:
+                    break
+                encoded.extend(symbol.to_bytes(2, "big"))
+                node = 0
+            else:
+                node = descriptor
+        else:
+            raise ValueError(f"unterminated A/B menu entry {index}")
+        labels.append(encoded.decode("cp932"))
+    return tuple(labels)
+
+
+def _font_index(code: int) -> int:
+    lead, trail = code >> 8, code & 0xFF
+    row = lead - 0x81 if lead < 0xA0 else lead - 0xC1
+    return trail - 0x40 + row * 189
+
+
+class PromptMeasurer:
+    """Measure the final visible page of a composed English prompt."""
+    def __init__(self, executable: bytes):
+        self.executable = executable
+        self.width_cache: dict[str, int] = {" ": 4}
+        self.dynamic_text = {
+            "A63": max(NT.DEMONS, key=self.text_width),
+            "A64": max(NT.RACES, key=self.text_width),
+        }
+        # Player-entered names may contain eight characters.  Use eight copies
+        # of the widest selectable glyph as a conservative bound for A6F.
+        name_chars = set("".join(NT.DEMONS + NT.RACES)) | set(
+            "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789?!'-."
+        )
+        widest_name_char = max(name_chars, key=self.char_width)
+        self.dynamic_text["A6F"] = widest_name_char * 8
+
+    def char_width(self, char: str) -> int:
+        if char in self.width_cache:
+            return self.width_cache[char]
+        try:
+            code = ET.fullwidth(char)
+        except KeyError:
+            # A few non-prompt audit rows contain dictionary-rendered symbols
+            # outside the ordinary Latin table. They cannot be narrower than
+            # the English glyph assumptions, so retain a full-cell bound.
+            self.width_cache[char] = FONT12_WIDTH
+            return FONT12_WIDTH
+        index = _font_index(code)
+        start = file_offset(FONT12_ADDRESS) + index * FONT12_BYTES
+        columns = []
+        for y in range(FONT12_HEIGHT):
+            for x in range(FONT12_WIDTH):
+                bit = y * FONT12_WIDTH + x
+                if self.executable[start + bit // 8] & (1 << (7 - bit % 8)):
+                    columns.append(x)
+        width = 4 if not columns else max(columns) - min(columns) + 2
+        self.width_cache[char] = width
+        return width
+
+    def text_width(self, text: str) -> int:
+        return sum(self.char_width(char) for char in text)
+
+    def measure(self, messages: tuple[int, ...]) -> dict[str, int | bool]:
+        explicit_widths = [0]
+        rendered_widths = [0]
+
+        def newline(widths: list[int]) -> None:
+            # The installed line-break guard makes a break at line start a
+            # no-op, preventing authored and automatic breaks from doubling.
+            if widths[-1]:
+                widths.append(0)
+
+        def append_text(text: str) -> None:
+            for char in text:
+                width = self.char_width(char)
+                explicit_widths[-1] += width
+                if rendered_widths[-1] and rendered_widths[-1] + width > PROMPT_SAFE_WIDTH:
+                    rendered_widths.append(0)
+                rendered_widths[-1] += width
+
+        for message in messages:
+            for token in TRANS.get(message, ()):
+                if not isinstance(token, str):
+                    continue
+                if token == "A66":
+                    # A66 clears/scrolls the old page before the response page.
+                    explicit_widths[:] = [0]
+                    rendered_widths[:] = [0]
+                elif token in {"A65", "CR"}:
+                    newline(explicit_widths)
+                    newline(rendered_widths)
+                elif token in self.dynamic_text:
+                    append_text(self.dynamic_text[token])
+                elif token in DYNAMIC_NAMES:
+                    # No other dynamic insertion is currently reachable in a
+                    # custom-menu prompt. Retain a conservative eight-character
+                    # bound if a future bytecode/script edit introduces one.
+                    append_text("W" * 8)
+                elif token in IGNORED_CONTROLS or (
+                    token.startswith("A") and token[1:].isalnum()
+                ):
+                    continue
+                else:
+                    append_text(token)
+
+        def occupied_lines(widths: list[int]) -> int:
+            occupied = [index for index, width in enumerate(widths) if width]
+            return occupied[-1] + 1 if occupied else 1
+
+        return {
+            "prompt_explicit_lines": occupied_lines(explicit_widths),
+            "prompt_rendered_lines": occupied_lines(rendered_widths),
+            "prompt_max_line_px": max(rendered_widths),
+            "prompt_has_dynamic_insert": any(
+                isinstance(token, str) and token in self.dynamic_text
+                for message in messages for token in TRANS.get(message, ())
+            ),
+        }
 
 
 def yes_no_natural(text: str) -> bool:
@@ -358,7 +519,13 @@ def slots_for(graph: dict[int, Instruction], chain: tuple[int, ...]) -> tuple[in
     return tuple(graph[address].slot for address in chain)  # type: ignore[arg-type]
 
 
-def write_tsv(path: Path, program: NegotiationProgram, japanese: dict[int, str]):
+def write_tsv(
+    path: Path,
+    program: NegotiationProgram,
+    japanese: dict[int, str],
+    japanese_menu: tuple[str, ...],
+    measurer: PromptMeasurer,
+):
     rows = []
     totals = collections.Counter()
     for family in range(len(MESSAGE_BASES)):
@@ -374,12 +541,25 @@ def write_tsv(path: Path, program: NegotiationProgram, japanese: dict[int, str])
         totals["truncated"] += len(truncated)
         totals["repeat_loops"] += sum(first == second for first, second in adjacent)
         for variant in range(VARIANT_COUNTS[family]):
-            def add_row(kind, address, chain, labels=""):
+            def add_row(kind, address, chain, labels: tuple[int, ...] = ()):
                 slots = slots_for(graph, chain)
                 messages = tuple(message_id(family, variant, slot) for slot in slots)
                 fragments = tuple(render_translation(message) for message in messages)
                 english = " + ".join(fragments)
                 source = " + ".join(japanese.get(message, "") for message in messages)
+                layout = measurer.measure(messages)
+                label_text = " | ".join(
+                    AB_MENU[label] if label < len(AB_MENU) else f"<{label}>"
+                    for label in labels
+                )
+                source_label_text = " | ".join(
+                    japanese_menu[label]
+                    if label < len(japanese_menu) else f"<{label}>"
+                    for label in labels
+                )
+                if kind == "yes_no":
+                    label_text = "Yes | No"
+                    source_label_text = "はい | いいえ"
                 rows.append({
                     "kind": kind,
                     "family": family,
@@ -387,11 +567,18 @@ def write_tsv(path: Path, program: NegotiationProgram, japanese: dict[int, str])
                     "script_address": f"0x{address:08x}" if address is not None else "",
                     "slot_sequence": " ".join(f"{slot:02x}" for slot in slots),
                     "message_ids": " ".join(f"{message:04x}" for message in messages),
-                    "menu_labels": labels,
+                    "menu_indices": " ".join(str(label) for label in labels),
+                    "menu_labels": label_text,
+                    "menu_japanese": source_label_text,
                     "yes_no_review": (
                         "OK"
                         if kind != "yes_no" or yes_no_natural(fragments[-1])
                         else "CHECK"
+                    ),
+                    **layout,
+                    "layout_review": (
+                        "OK" if kind != "custom_menu"
+                        or int(layout["prompt_rendered_lines"]) <= 2 else "CHECK"
                     ),
                     "english": english,
                     "japanese": source,
@@ -401,19 +588,14 @@ def write_tsv(path: Path, program: NegotiationProgram, japanese: dict[int, str])
                 if len(chain) >= 2:
                     add_row("fragment_sequence", None, chain)
             for address, chain in sorted(yes_no):
-                add_row("yes_no", address, chain, "Yes | No")
+                add_row("yes_no", address, chain)
             for address, labels, chain in sorted(menus):
-                label_text = " | ".join(
-                    AB_MENU[label] if label < len(AB_MENU) else f"<{label}>"
-                    for label in labels
-                )
-                add_row("custom_menu", address, chain, label_text)
+                add_row("custom_menu", address, chain, labels)
             for first, second in sorted(adjacent):
                 add_row("adjacent_pair", None, (first, second))
                 if first == second:
                     add_row(
                         "repeatable_fragment", first, (first,),
-                        "may repeat any number of times",
                     )
 
     rows.sort(key=lambda row: (
@@ -426,6 +608,80 @@ def write_tsv(path: Path, program: NegotiationProgram, japanese: dict[int, str])
         writer.writeheader()
         writer.writerows(rows)
     return rows, totals
+
+
+def write_menu_tsv(path: Path, rows: list[dict[str, object]]) -> int:
+    """Write the focused raw-Japanese prompt-to-choice review reference."""
+    menu_rows = [row for row in rows if row["kind"] == "custom_menu"]
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=menu_rows[0].keys(), delimiter="\t")
+        writer.writeheader()
+        writer.writerows(menu_rows)
+    return len(menu_rows)
+
+
+def write_choice_uses_tsv(
+    path: Path,
+    rows: list[dict[str, object]],
+    japanese_menu: tuple[str, ...],
+) -> int:
+    """Invert the menu audit so every A/B choice has its prompt contexts."""
+    menu_rows = [row for row in rows if row["kind"] == "custom_menu"]
+    uses: dict[int, list[dict[str, object]]] = collections.defaultdict(list)
+    for row in menu_rows:
+        for label in str(row["menu_indices"]).split():
+            uses[int(label)].append(row)
+
+    output = []
+    for index, (english_choice, japanese_choice) in enumerate(
+        zip(AB_MENU, japanese_menu)
+    ):
+        contexts = uses.get(index, [])
+        if not contexts:
+            output.append({
+                "choice_index": index,
+                "choice_japanese": japanese_choice,
+                "choice_english": english_choice,
+                "reachable_custom_menu": "NO",
+                "expanded_use_count": 0,
+                "script_address": "",
+                "family": "",
+                "variant": "",
+                "message_ids": "",
+                "prompt_japanese": "",
+                "prompt_english": "",
+                "choice_set_indices": "",
+                "choice_set_japanese": "",
+                "choice_set_english": "",
+                "prompt_rendered_lines": "",
+            })
+            continue
+        for row in contexts:
+            output.append({
+                "choice_index": index,
+                "choice_japanese": japanese_choice,
+                "choice_english": english_choice,
+                "reachable_custom_menu": "YES",
+                "expanded_use_count": len(contexts),
+                "script_address": row["script_address"],
+                "family": row["family"],
+                "variant": row["variant"],
+                "message_ids": row["message_ids"],
+                "prompt_japanese": row["japanese"],
+                "prompt_english": row["english"],
+                "choice_set_indices": row["menu_indices"],
+                "choice_set_japanese": row["menu_japanese"],
+                "choice_set_english": row["menu_labels"],
+                "prompt_rendered_lines": row["prompt_rendered_lines"],
+            })
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=output[0].keys(), delimiter="\t")
+        writer.writeheader()
+        writer.writerows(output)
+    return len(output)
 
 
 def write_markdown(
@@ -444,6 +700,26 @@ def write_markdown(
         flagged_occurrences[final_message] += 1
 
     repeat_rows = [row for row in rows if row["kind"] == "repeatable_fragment"]
+    menu_rows = [row for row in rows if row["kind"] == "custom_menu"]
+    menu_sites = {
+        (row["family"], row["script_address"]) for row in menu_rows
+    }
+    menu_addresses = {row["script_address"] for row in menu_rows}
+    menu_contexts = {
+        (row["script_address"], row["message_ids"], row["menu_indices"])
+        for row in menu_rows
+    }
+    used_menu_indices = sorted({
+        int(label)
+        for row in menu_rows
+        for label in str(row["menu_indices"]).split()
+    })
+    two_line_menu_rows = [
+        row for row in menu_rows if int(row["prompt_rendered_lines"]) == 2
+    ]
+    overlong_menu_rows = [
+        row for row in menu_rows if row["layout_review"] == "CHECK"
+    ]
 
     examples = {}
     for row in rows:
@@ -458,9 +734,11 @@ def write_markdown(
         "Generated by `python tools/audit_negotiation.py` from the executable bytecode and",
         "the current entries in `tools/translations.py`.",
         "",
-        "The executable is used only to establish control flow, fragment slots, and menu",
-        "type. The `japanese` column is loaded verbatim from `SMT2_full_script.txt` and is",
-        "the source of truth for translation meaning and voice.",
+        "The executable is used to establish control flow, fragment slots, and menu type.",
+        "Prompt Japanese in the `japanese` column is loaded verbatim from",
+        "`SMT2_full_script.txt`; choice Japanese is decoded directly from the pristine",
+        "executable's stock A/B Huffman table. Those two raw-Japanese columns are the",
+        "source of truth for translation meaning and voice.",
         "",
         "## Coverage",
         "",
@@ -506,6 +784,54 @@ def write_markdown(
 
     lines += [
         "",
+        "## Custom prompt and response menus",
+        "",
+        f"- {len(menu_addresses)} distinct custom-menu bytecode addresses",
+        f"- {len(menu_sites)} reachable family-specific custom-menu sites",
+        f"- {len(menu_contexts)} distinct prompt/choice contexts after family variants",
+        f"- {len(used_menu_indices)} of {len(AB_MENU)} A/B menu labels are reachable here",
+        f"- {len(two_line_menu_rows)} expanded prompt uses render on two lines",
+        f"- {len(overlong_menu_rows)} expanded prompt uses exceed the two-line allowance",
+        "",
+        "`negotiation_menu_prompts.tsv` is the focused translation reference. Each row",
+        "pairs the complete reachable raw-Japanese prompt composition with its exact",
+        "stock Japanese choices, A/B indices, and current English prompt/choices. Dynamic",
+        "demon, race, and player-name inserts are measured at their conservative maximum",
+        "when calculating `prompt_rendered_lines`.",
+        "`negotiation_choice_uses.tsv` provides the inverse view: all 115 A/B entries",
+        "in index order, followed by every prompt and complete choice set that can use",
+        "each entry. Unreachable entries remain present and are marked `NO`.",
+        "",
+    ]
+    if overlong_menu_rows:
+        lines += [
+            "### Prompts still exceeding two lines",
+            "",
+            "| Address | Messages | Lines | Current English | Choices |",
+            "|---|---|---:|---|---|",
+        ]
+        seen_overlong = set()
+        for row in overlong_menu_rows:
+            key = (row["script_address"], row["message_ids"], row["menu_indices"])
+            if key in seen_overlong:
+                continue
+            seen_overlong.add(key)
+            english = str(row["english"]).replace("|", "\\|")
+            choices = str(row["menu_labels"]).replace("|", "\\|")
+            lines.append(
+                f"| `{row['script_address']}` | `{row['message_ids']}` | "
+                f"{row['prompt_rendered_lines']} | {english} | {choices} |"
+            )
+        lines.append("")
+    else:
+        lines += [
+            "All reachable custom-menu prompts fit the two-line allowance after the",
+            "response window's one-row downward shift.",
+            "",
+        ]
+
+    lines += [
+        "",
         "## Binary prompts needing wording review",
         "",
         "This is deliberately conservative: prompts are flagged when they do not look like",
@@ -548,14 +874,34 @@ def main() -> None:
     parser.add_argument(
         "--tsv", type=Path, default=ROOT / "build" / "negotiation_combinations.tsv"
     )
+    parser.add_argument(
+        "--menus-tsv", type=Path,
+        default=ROOT / "build" / "negotiation_menu_prompts.tsv",
+        help="focused raw-Japanese prompt and exact response-choice reference",
+    )
+    parser.add_argument(
+        "--choice-uses-tsv", type=Path,
+        default=ROOT / "build" / "negotiation_choice_uses.tsv",
+        help="A/B choice-index inventory with every reachable prompt context",
+    )
     args = parser.parse_args()
 
     executable = args.exe.read_bytes()
     program = NegotiationProgram(executable)
     japanese = load_japanese(args.script)
-    rows, totals = write_tsv(args.tsv, program, japanese)
+    japanese_menu = decode_stock_ab_menu(executable)
+    measurer = PromptMeasurer(executable)
+    rows, totals = write_tsv(
+        args.tsv, program, japanese, japanese_menu, measurer
+    )
+    menu_row_count = write_menu_tsv(args.menus_tsv, rows)
+    choice_row_count = write_choice_uses_tsv(
+        args.choice_uses_tsv, rows, japanese_menu
+    )
     write_markdown(args.markdown, rows, totals, japanese)
     print(f"wrote {len(rows)} rows to {args.tsv}")
+    print(f"wrote {menu_row_count} menu rows to {args.menus_tsv}")
+    print(f"wrote {choice_row_count} choice-use rows to {args.choice_uses_tsv}")
     print(f"wrote summary to {args.markdown}")
 
 

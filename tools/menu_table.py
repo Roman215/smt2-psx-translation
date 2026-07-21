@@ -4,7 +4,7 @@ The 136-entry C/D table uses the C/D Huffman tree.  Demon negotiation uses a
 separate 115-entry table and the A/B tree; that table must be rebuilt whenever
 the English A/B tree changes or its choices decode as garbage.
 """
-import struct, sys
+import re, struct, sys
 sys.path.insert(0,"tools")
 import build_en_tree as ET, block_rebuild as BR
 
@@ -31,6 +31,49 @@ AB_MENU_DATA_REFS={
     0x800671bc:0x24a626be,
 }
 AB_MENU_END_TOKEN=(0x8140,True,0x0f)
+
+# The common 1-4-row dialogue-choice window is also used by demon negotiation.
+# Stock gives it a 128px box and only 120px for text/highlight, which clips the
+# longer English responses.  Keep the box centered at x=160 while expanding it
+# to 200px; four pixels of padding on each side leave a 192px text region.
+#
+# Some reachable negotiation prompts occupy two dialogue rows.  Stock starts
+# the response window immediately after the first row, so move the complete UI
+# down by one 13px dialogue row: frame, text surface, glyphs, and highlight.
+AB_MENU_WINDOW_LEFT=60
+AB_MENU_WINDOW_RIGHT=260
+AB_MENU_WINDOW_TOP=166
+AB_MENU_TEXT_X=64
+AB_MENU_TEXT_WIDTH=192
+AB_MENU_TEXT_Y0=168
+AB_MENU_STOCK_WINDOW_LEFT=96
+AB_MENU_STOCK_WINDOW_RIGHT=224
+AB_MENU_STOCK_WINDOW_TOP=153
+AB_MENU_STOCK_TEXT_X=100
+AB_MENU_STOCK_TEXT_WIDTH=120
+AB_MENU_STOCK_TEXT_Y0=155
+# The labels are rendered into a separate 128x52 object surface whose stock
+# screen origin is (96,153).  Each row begins with a raw ``mu 4,y`` position
+# command, so the visible glyph origin is surface_x+4.  Move and enlarge the
+# surface along with the window; changing only the selection rectangles leaves
+# the glyphs at their stock x=100 position and leaves the backing bitmap narrow.
+AB_MENU_SURFACE_X=AB_MENU_WINDOW_LEFT
+AB_MENU_SURFACE_WIDTH=AB_MENU_WINDOW_RIGHT-AB_MENU_WINDOW_LEFT
+AB_MENU_SURFACE_Y=AB_MENU_WINDOW_TOP
+AB_MENU_STOCK_SURFACE_X=AB_MENU_STOCK_WINDOW_LEFT
+AB_MENU_STOCK_SURFACE_WIDTH=AB_MENU_STOCK_WINDOW_RIGHT-AB_MENU_STOCK_WINDOW_LEFT
+AB_MENU_STOCK_SURFACE_Y=AB_MENU_STOCK_WINDOW_TOP
+AB_MENU_WINDOW_RECTS=(
+    (0x800eeee0,166), (0x800eeee8,153),  # one-row open and closed
+    (0x800eef1c,179), (0x800eef24,153),  # two rows
+    (0x800eef58,192), (0x800eef60,153),  # three rows
+    (0x800eef94,205), (0x800eef9c,153),  # four rows
+)
+AB_MENU_TEXT_ROWS=tuple(0x800f7bbc+8*row for row in range(4))
+AB_MENU_SURFACE_X_FIELDS=(0x800ef03a,0x800ef048,0x800ef05c)
+AB_MENU_SURFACE_Y_FIELDS=(0x800ef03c,0x800ef04a,0x800ef05e)
+AB_MENU_SURFACE_WIDTH_FIELDS=(0x800eefe4,0x800ef050,0x800ef064,0x800ef090)
+VWF_WIDTH_TABLE=0x800d7300
 
 # index -> English (Atlus-style). "" = keep empty. Keep under data budget.
 MENU={
@@ -67,37 +110,168 @@ MENU={
 
 # Negotiation response labels.  These are indexed independently from MENU;
 # for example, entries 92/93 are the Friendly/Intimidating pair shown after
-# "How will you respond?". Keep the wording concise for the narrow choice box.
+# "How will you respond?". The layout verifier below ensures every label fits.
 AB_MENU=(
- "Smile", "Pretend to Flinch", "Flatter", "Stare", "Soothe", "Laugh",
- "Approach", "Ignore", "Introduce Yourself", "Ask to Join", "Macca",
- "Magnetite", "Go Away", "Yes", "No", "Perform a Trick", "Dance",
- "Imitate", "Acrobatics", "Do It", "Stop", "Join Me",
- "Give Me Something", "A Demon", "A Girl", "Charming", "Frightening",
- "Just Prey", "Because I Like You", "It Was Fate",
- "For Everyone's Happiness", "No Reason", "I Was Captivated",
- "Because I Need You", "Frightening", "Just a Hobby", "Threaten with Gun",
- "Glare", "Chase", "Give Up", "Goodbye", "Wait", "Not Worth Mentioning",
- "Scold", "I Don't Trust You", "Come Here",
- "Humans and Demons Are Friends", "Show a Skill", "Sing", "Speed-Eat",
- "Quick Draw", "Break a Boulder", "Laugh Again", "Laugh Proudly",
- "You're Right", "You're Wrong", "Persuade", "Fight", "Chuckle",
- "Compliment", "Grin", "Angry Face", "That's Right", "Maybe", "Say It",
- "Refuse", "I'll Return the Favor", "That Won't Happen", "Yes",
- "Nothing Special", "Ask", "Smirk", "I Guess", "Not Really",
- "Warning Shot", "Let's Stay Friends", "Apologize", "I Want to Live",
- "Charming", "Useful", "A Funny Story", "A Rumor", "About Life",
- "The Messiah", "Me", "Just a Human", "Make Money", "Be Free", "Nothing",
- "Maybe So", "Absolutely Not", "What Do You Mean?", "Friendly",
- "Intimidating", "Lay Them to Rest", "Feed Them", "Something Nice",
- "Gladly", "Thank You", "More Than a Name", "Myself", "Act Affectionate",
- "You're a Champ", "Sulk", "You Got Me", "Just Saying Hello",
- "I Have Something to Say", "Don't Mess with Me", "Just Business",
- "In My Pocket", "Accept the Challenge", "Look Away", "Of Course", "Item",
+ "Smile", "Pretend to flinch", "Flatter", "Stare", "Soothe", "Laugh",
+ "Approach", "Ignore", "Introduce yourself", "Ask to join", "Macca",
+ "Magnetite", "Go away", "Yes", "No", "Perform a trick", "Dance",
+ "Imitate", "Acrobatics", "Do it", "Stop", "Join me",
+ "Give me something", "A demon", "A girl", "Charming", "Frightening",
+ "Just prey", "Because I like you", "It was fate",
+ "For everyone's happiness", "Nothing in particular", "I was captivated",
+ "Because I need you", "Frightening", "Just a hobby", "Threaten with gun",
+ "Glare", "Chase", "Give up", "Goodbye", "Wait", "Not worth mentioning",
+ "Scold", "I don't trust you", "Come here",
+ "Humans and demons are friends", "Show a skill", "Sing", "Speed-eat",
+ "Quick draw", "Break a boulder", "Laugh again", "Laugh proudly",
+ "You're right", "You're wrong", "Persuade", "Fight", "Chuckle",
+ "Compliment", "Grin", "Angry face", "That's right", "Maybe", "Say it",
+ "Refuse", "I'll make it worth your while", "That won't happen", "That's right",
+ "Nothing special", "Ask", "Smirk", "I guess", "Not really",
+ "Warning shot", "Let's stay friends", "Apologize", "I want to live",
+ "Charming", "Useful", "A funny story", "A rumor", "About life",
+ "The Messiah", "Me", "Just a human", "Make money", "Be free", "Nothing",
+ "Maybe so", "Absolutely not", "What do you mean?", "Friendly",
+ "Intimidating", "Put it to rest", "Let it eat", "Something nice",
+ "Gladly", "Thank you", "More than a name", "Myself", "Act affectionate",
+ "You're a champ", "Sulk", "You got me", "Just saying hello",
+ "I need to talk", "Don't mess with me", "Just business",
+ "In my pocket", "Accept the challenge", "Look away", "Of course", "An item",
  "Smile",
 )
 if len(AB_MENU)!=N_AB_MENU:
     raise ValueError(f"A/B menu entry count {len(AB_MENU)} != {N_AB_MENU}")
+
+def _foff(address):
+    return address-0x80010000+0x800
+
+def _width_index(code):
+    """Mirror the dialogue VWF hook's ``(lead-0x81)*256 + trail`` lookup."""
+    return ((code>>8)-0x81)*256+(code&0xff)
+
+def ab_menu_text_width(exe,text):
+    """Measure a label with the installed 12x12 dialogue VWF table."""
+    total=0
+    for char in text:
+        index=_width_index(ET.fullwidth(char))
+        if not 0<=index<512:
+            raise ValueError(f"A/B menu character outside VWF table: {char!r}")
+        total+=exe[_foff(VWF_WIDTH_TABLE)+index]
+    return total
+
+def widest_ab_menu_entry(exe):
+    return max(
+        ((ab_menu_text_width(exe,text),index,text) for index,text in enumerate(AB_MENU)),
+        key=lambda entry:entry[0],
+    )
+
+def _verify_ab_menu_sentence_case():
+    proper_words={"I","Messiah"}
+    for index,text in enumerate(AB_MENU):
+        words=re.findall(r"[A-Za-z]+(?:'[A-Za-z]+)?",text)
+        unexpected=[word for word in words[1:] if word[0].isupper() and word not in proper_words]
+        if unexpected:
+            raise SystemExit(
+                f"A/B menu {index} is not sentence case: {text!r} ({unexpected!r})"
+            )
+
+def verify_ab_menu_layout(exe):
+    def u16(address): return struct.unpack_from("<H",exe,_foff(address))[0]
+    for address,stock_bottom in AB_MENU_WINDOW_RECTS:
+        got=tuple(u16(address+2*field) for field in range(4))
+        want=(
+            AB_MENU_WINDOW_LEFT,
+            AB_MENU_WINDOW_TOP,
+            AB_MENU_WINDOW_RIGHT,
+            stock_bottom+(AB_MENU_WINDOW_TOP-AB_MENU_STOCK_WINDOW_TOP),
+        )
+        if got!=want:
+            raise SystemExit(f"A/B choice window {address:#x}: {got!r} != {want!r}")
+    for row,address in enumerate(AB_MENU_TEXT_ROWS):
+        got=tuple(u16(address+2*field) for field in range(4))
+        want=(AB_MENU_TEXT_X,AB_MENU_TEXT_Y0+12*row,AB_MENU_TEXT_WIDTH,12)
+        if got!=want:
+            raise SystemExit(f"A/B choice row {address:#x}: {got!r} != {want!r}")
+    for address in AB_MENU_SURFACE_X_FIELDS:
+        got=u16(address)
+        if got!=AB_MENU_SURFACE_X:
+            raise SystemExit(
+                f"A/B text surface origin {address:#x}: "
+                f"{got} != {AB_MENU_SURFACE_X}"
+            )
+    for address in AB_MENU_SURFACE_Y_FIELDS:
+        got=u16(address)
+        if got!=AB_MENU_SURFACE_Y:
+            raise SystemExit(
+                f"A/B text surface y origin {address:#x}: "
+                f"{got} != {AB_MENU_SURFACE_Y}"
+            )
+    for address in AB_MENU_SURFACE_WIDTH_FIELDS:
+        got=u16(address)
+        if got!=AB_MENU_SURFACE_WIDTH:
+            raise SystemExit(
+                f"A/B text surface width {address:#x}: "
+                f"{got} != {AB_MENU_SURFACE_WIDTH}"
+            )
+    widest,index,text=widest_ab_menu_entry(exe)
+    if widest>AB_MENU_TEXT_WIDTH:
+        raise SystemExit(
+            f"A/B menu {index} {text!r} is {widest}px, wider than "
+            f"the {AB_MENU_TEXT_WIDTH}px choice region"
+        )
+    _verify_ab_menu_sentence_case()
+
+def patch_ab_menu_layout(exe):
+    """Widen and lower the shared dialogue-choice response box."""
+    def u16(address): return struct.unpack_from("<H",exe,_foff(address))[0]
+    def w16(address,value): struct.pack_into("<H",exe,_foff(address),value)
+    for address,stock_bottom in AB_MENU_WINDOW_RECTS:
+        got=tuple(u16(address+2*field) for field in range(4))
+        want=(
+            AB_MENU_STOCK_WINDOW_LEFT,
+            AB_MENU_STOCK_WINDOW_TOP,
+            AB_MENU_STOCK_WINDOW_RIGHT,
+            stock_bottom,
+        )
+        if got!=want:
+            raise SystemExit(f"A/B stock choice window {address:#x}: {got!r} != {want!r}")
+        w16(address,AB_MENU_WINDOW_LEFT)
+        w16(address+2,AB_MENU_WINDOW_TOP)
+        w16(address+4,AB_MENU_WINDOW_RIGHT)
+        w16(address+6,stock_bottom+(AB_MENU_WINDOW_TOP-AB_MENU_STOCK_WINDOW_TOP))
+    for row,address in enumerate(AB_MENU_TEXT_ROWS):
+        got=tuple(u16(address+2*field) for field in range(4))
+        want=(AB_MENU_STOCK_TEXT_X,AB_MENU_STOCK_TEXT_Y0+12*row,AB_MENU_STOCK_TEXT_WIDTH,12)
+        if got!=want:
+            raise SystemExit(f"A/B stock choice row {address:#x}: {got!r} != {want!r}")
+        w16(address,AB_MENU_TEXT_X)
+        w16(address+2,AB_MENU_TEXT_Y0+12*row)
+        w16(address+4,AB_MENU_TEXT_WIDTH)
+    for address in AB_MENU_SURFACE_X_FIELDS:
+        got=u16(address)
+        if got!=AB_MENU_STOCK_SURFACE_X:
+            raise SystemExit(
+                f"A/B stock text surface origin {address:#x}: "
+                f"{got} != {AB_MENU_STOCK_SURFACE_X}"
+            )
+        w16(address,AB_MENU_SURFACE_X)
+    for address in AB_MENU_SURFACE_Y_FIELDS:
+        got=u16(address)
+        if got!=AB_MENU_STOCK_SURFACE_Y:
+            raise SystemExit(
+                f"A/B stock text surface y origin {address:#x}: "
+                f"{got} != {AB_MENU_STOCK_SURFACE_Y}"
+            )
+        w16(address,AB_MENU_SURFACE_Y)
+    for address in AB_MENU_SURFACE_WIDTH_FIELDS:
+        got=u16(address)
+        if got!=AB_MENU_STOCK_SURFACE_WIDTH:
+            raise SystemExit(
+                f"A/B stock text surface width {address:#x}: "
+                f"{got} != {AB_MENU_STOCK_SURFACE_WIDTH}"
+            )
+        w16(address,AB_MENU_SURFACE_WIDTH)
+    verify_ab_menu_layout(exe)
 
 def _ab_menu_tokens(text):
     return tuple((ET.fullwidth(ch),False) for ch in text)+(AB_MENU_END_TOKEN,)
@@ -149,6 +323,7 @@ def verify_ab_menu(exe):
             raise SystemExit(f"A/B menu {index}: unterminated Huffman stream")
         if tuple(got)!=want:
             raise SystemExit(f"A/B menu {index}: decode mismatch {got!r} != {want!r}")
+    verify_ab_menu_layout(exe)
 
 def rebuild_ab_menu(exe, paths):
     """Encode the English negotiation labels with plain A/B-tree leaves."""
@@ -205,6 +380,7 @@ def rebuild_ab_menu(exe, paths):
         exe[foff(start):foff(end)]=bytes(end-start)
     for encoded,address in interned.items():
         exe[foff(address):foff(address)+len(encoded)]=encoded
+    patch_ab_menu_layout(exe)
     verify_ab_menu(exe)
     return used,budget
 
