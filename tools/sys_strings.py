@@ -59,6 +59,8 @@ FULLWIDTH_SYSTEM_TEXT = {
     0x2308,  # church/shop leave option (drawn by the object compositor)
     0x3df0,  # Church exit label (copied as a fixed nine-byte object string)
     0x3fd8,  # casino prize-cost suffix (appended to a fullwidth row)
+    0x4b68,  # battle status-view action prompt (fixed 15-byte copy)
+    0x4b78,  # per-combatant action suffix (appended after a fullwidth name)
     0x52bc,  # First demon?
     0x52d8,  # Next demon?
     0x52f0,  # Final demon?
@@ -478,6 +480,12 @@ AUDITED_SYSTEM_TEXT = {
     0x3f40: "Mr. DNA",
     0x3f50: "Timing X",
     0x3fd8: "C",                           # Coins; stock Japanese counter is 枚
+
+    # Battle prompts stored as raw executable literals rather than compressed
+    # bank messages.  The second is appended after the combatant's name.
+    0x4b68: "Action?",                     # どうしますか？
+    0x4b78: ": Action?",                   # [name]は　どうしますか？
+    0x4bb0: "COMP Active",                 # ＣＯＭＰ作動
 
     # The third field-item target prompt at file offset 0x4e5c is not listed
     # here: its callers append SJIS directly and bypass the marker-aware system

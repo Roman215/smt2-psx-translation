@@ -13,6 +13,12 @@ your own verified source image.
 
 ## [Unreleased]
 
+### Fixed
+
+- Translated the raw battle action prompts used by the Triangle status view
+  and individual combatant selection, along with the related COMP activation
+  label.
+
 ## [0.1.4] - 2026-07-20
 
 This maintenance release addresses text-rendering and menu-layout issues found
