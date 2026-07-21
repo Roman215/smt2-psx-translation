@@ -57,6 +57,12 @@ FULLWIDTH_SYSTEM_TEXT = {
     0x1eec,  # casino, short on Macca (あら　£が　足りないわ; follows γ marker)
     0x1f0c,  # casino code entry prompt (コードを入力せよ：; follows ζ marker)
     0x2308,  # church/shop leave option (drawn by the object compositor)
+    0x3f78,  # shop comparison: Strength (appended to a composed text stream)
+    0x3f80,  # shop comparison: Intelligence
+    0x3f88,  # shop comparison: Magic
+    0x3f90,  # shop comparison: Stamina
+    0x3f98,  # shop comparison: Speed
+    0x3fa0,  # shop comparison: Luck
     0x3df0,  # Church exit label (copied as a fixed nine-byte object string)
     0x3fd8,  # casino prize-cost suffix (appended to a fullwidth row)
     0x4b68,  # battle status-view action prompt (fixed 15-byte copy)
@@ -228,9 +234,21 @@ SYS = {
 
     # ===================== STAT / SHOP / CASINO =====================
     0x1d5c: (16, "Points"),               # 残りポイント (level-up points left)
+    0x22f8: (8, "Buy"),                  # 買う
+    0x2300: (8, "Sell"),                 # 売る
     0x2308: (12, "Exit"),                 # 店を出る (leave shop)
     0x1eec: (24, "Oh, you're short on ћ."),  # あら　ћが　足りないわ (not enough Macca)
     0x1f0c: (20, "Code:"),                # コードを入力せよ：
+
+    # The shop comparison panel requests these through the message append
+    # router, not either marker-aware screen printer, so they must stay
+    # fullwidth.  Three-letter captions fit their original eight-byte cells.
+    0x3f78: (8, "Str"),                  # 力
+    0x3f80: (8, "Int"),                  # 知恵
+    0x3f88: (8, "Mag"),                  # 魔力
+    0x3f90: (8, "Sta"),                  # 体力
+    0x3f98: (8, "Spd"),                  # 速さ
+    0x3fa0: (8, "Lck"),                  # 運
 
     # ===================== SYSTEM-MENU / CONFIG HELP LINES =====================
     0x1e4c: (24, "Swap places"),          # 位置替えをしてください
@@ -330,6 +348,8 @@ RETRANSLATED = {
     0x1e9c: "Create suspend data.",        # 中断セーブを行います
     0x1eec: "Short on ћ.",                # あら ћが足りないわ (fullwidth; 24-byte slot)
     0x1f0c: "Enter:",                     # コードを入力せよ： (fullwidth; follows ζ)
+    0x22f8: "Buy",                        # 買う
+    0x2300: "Sell",                       # 売る
     0x201c: "Use it on whom?",            # 誰に使いますか？
     0x2308: "Leave",                      # 店を出る
 

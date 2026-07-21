@@ -6814,7 +6814,7 @@ TRANS = {
     0x5052:['A6E',": What are you thinking?!",'A0F','A0F'],
     0x5053:['A6E',": You must be joking!",'A0F','A0F'],
     0x5054:["Raging ",'A68',"Su-",'A68','A68',"per ",'A68','A68',"Dynamite ",'A68','A65',
-      "Special ",'A68','A68','A6E','A68','A68',"Pu-",'A68',"u-",'A68',"unch!",'A61','A14'],
+      "Special ",'A68','A68','A6E','A68','A68'," Pu-",'A68',"u-",'A68',"unch!",'A61','A14'],
     0x5055:['A63',"'s XXXX was",'A67',"XXXXed!",'A0F','A0F'],
     0x5056:['A6E',"'s sweet song",'A67',"touched ",'A63',"'s heart.",'A0F'],
     0x5057:["Stepped forward",'A67',"and caught ",'A63'," off guard!",'A0F','A0F'],

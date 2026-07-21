@@ -22,12 +22,25 @@ your own verified source image.
 
 ### Fixed
 
+- Restored English text throughout weapon, armor, and item shops, including
+  clerk dialogue, Buy/Sell choices, item details, and the blue comparison
+  panels' stat and equipment captions.
 - Translated the raw battle action prompts used by the Triangle status view
   and individual combatant selection, along with the related COMP activation
   label.
 - Removed the colored flash at the start of rebuilt movies by preserving
   full-range black through the lossless encoding stage and validating the
   first encoded frame.
+- Restored the first letter of long prize names in the casino minigames'
+  PRIZE panel, which dropped it for any name of ten or more characters
+  ("Disparalyze" showed as "isparalyze"), and centered every prize on its
+  real kerned width instead of the Japanese fixed-width character grid.
+- Removed the stray blank line that appeared mid-sentence when a message
+  line reached the right edge of the dialogue box and the script's own line
+  break then fell on the following line.
+- Restored the separator between the two halves of a place name on one-line
+  displays such as the Automap header, which ran them together
+  ("Madam'sManor", "KeterCastle 8F").
 
 ## [0.1.4] - 2026-07-20
 

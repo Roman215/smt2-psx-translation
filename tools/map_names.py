@@ -12,10 +12,19 @@ renders on two lines).
 English names run longer than the katakana, so we RELOCATE the translated strings into
 the free rodata font-placeholder cave and REPOINT both tables. No code changes.
 
-Cave: 0x800d7500 .. 0x800d8290.  The 0x70 bytes at 0x800d8290 .. 0x800d8300 are
-spare (they held the object-compositor VWF hook until it moved to the SYM-table
-tail; see build.py _install_obj_vwf), then the marker-based system-string printer
-and its ASCII/SJIS table at 0x800d8300 .. 0x800d8500.
+Cave: two spans, see CAVES.  0x800d7500 .. 0x800d8290 is the original font-placeholder
+run; 0x800d8290 .. 0x800d8300 now holds build.py's casino prize-name measuring routine
+(it had been spare since the object-compositor VWF hook moved to the SYM-table tail),
+then the marker-based system-string printer and its ASCII/SJIS table at
+0x800d8300 .. 0x800d8500.
+
+The '@' break is INVISIBLE: it splits the two-line save/load display but contributes
+nothing on one-line displays like the Automap header.  Every original name that uses
+it therefore carries a visible separator right next to it -- a fullwidth space before
+(旧トウキョウタワー　＠３０Ｆ) or a 〜 / − after (アルカディア＠〜センター間通路) --
+so the halves stay apart when the name is drawn on one line.  _enc restores that by
+emitting a fullwidth space ahead of every break, which is why no ENGLISH entry below
+should write one itself.
 
 Translation notes: dropped the redundant "旧" (former) prefix (all of Tokyo is ruined),
 '@' = line break so long names split Name/Floor for the ~2-line display, Kabbalah Sefirot
@@ -31,8 +40,14 @@ AREA_COUNT = 17
 MAP_TABLE = 0x8011a084
 MAP_COUNT = 512
 STR_LO, STR_HI = 0x80016000, 0x80017000     # original string block bounds
-CAVE_LO, CAVE_HI = 0x800d7500, 0x800d8290    # 0x800d8290+ reserved by build.py
-BR = 0x8197                                   # line-break control char
+# Second span: the 12x12 font's unused Cyrillic block (SJIS 0x8440-0x849e = glyphs
+# 567-661, real letterforms plus the unassigned cells between them).  Nothing in the
+# game reaches them -- scanning the exe, every overlay and ZZZZZZZZ.ZZZ found neither a
+# string using those codepoints nor a pointer into the range.  The block starts at
+# 0x800d6966; build.py's line-break guard takes its first 0x3a bytes.
+CAVES = ((0x800d69a0, 0x800d7014), (0x800d7500, 0x800d8290))
+CAVE_HI = CAVES[-1][1]                        # 0x800d8290+ reserved by build.py
+BR = 0x8197                                   # line-break control char (invisible)
 
 # English for each unique string, in ASCENDING-ADDRESS order (must be exactly 144 long).
 # None = leave the original pointer untouched (empty slot / already-English "NEW GAME").
@@ -85,11 +100,16 @@ def _foff(a):
 
 
 def _enc(s):
-    """English (with '@' line-breaks) -> SJIS bytes."""
+    """English (with '@' line-breaks) -> SJIS bytes.
+
+    A break is invisible, so it is preceded by a fullwidth space the way the original
+    names are: the two-line save display splits on the break and swallows the trailing
+    space, while one-line displays get the separator they would otherwise lack.
+    """
     out = bytearray()
     for ch in s:
         if ch == '@':
-            out += struct.pack(">H", BR)
+            out += struct.pack(">H", ET.fullwidth(' ')) + struct.pack(">H", BR)
         else:
             out += struct.pack(">H", ET.fullwidth(ch))
     return bytes(out)
@@ -108,18 +128,26 @@ def relocate_map_names(exe):
     if len(uniq) != len(ENGLISH):
         raise SystemExit(f"map_names: expected {len(uniq)} unique strings, ENGLISH has {len(ENGLISH)}")
 
-    # write English strings into the cave; build old-addr -> new-addr map
+    # write English strings into the caves; build old-addr -> new-addr map.
+    # A name never straddles two spans, so a name that does not fit the span in hand
+    # starts the next one; the few bytes left behind are the only waste.
     remap = {}
-    pos = CAVE_LO
+    spans = list(CAVES)
+    pos, end = spans.pop(0)
+    used = 0
     for addr, en in zip(uniq, ENGLISH):
         if en is None:
             continue
         data = _enc(en) + b"\x00"
-        if pos + len(data) > CAVE_HI:
-            raise SystemExit(f"map_names: cave overflow at {en!r} ({pos:#x}+{len(data)} > {CAVE_HI:#x})")
+        while pos + len(data) > end:
+            if not spans:
+                raise SystemExit(
+                    f"map_names: cave overflow at {en!r} ({pos:#x}+{len(data)} > {end:#x})")
+            pos, end = spans.pop(0)
         exe[_foff(pos):_foff(pos) + len(data)] = data
         remap[addr] = pos
         pos += len(data)
+        used += len(data)
 
     # repoint both tables (entries whose target we relocated)
     for base, count in ((AREA_TABLE, AREA_COUNT), (MAP_TABLE, MAP_COUNT)):
@@ -128,4 +156,4 @@ def relocate_map_names(exe):
             old = struct.unpack_from("<I", exe, o)[0]
             if old in remap:
                 struct.pack_into("<I", exe, o, remap[old])
-    return pos - CAVE_LO  # bytes used in the cave
+    return used  # string bytes written across the caves

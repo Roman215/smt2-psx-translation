@@ -435,6 +435,8 @@ def build_exe(font_slpm, widths, widths10, slpm):
     for i in range(512): exe[foff(WTABLE)+i]=tbl[i]
     w32(0x80048b80, jj(CAVE))
     w32(0x8004827c, jj(RAW_CAVE))
+    _patch_casino_prize_sprite(exe, w32, widths)
+    _patch_line_break_guard(exe, w32)
     BP.build_english_tree(exe, slpm)   # Dictionary-compressed C/D tree at 0x80117ec4 / 0x801187a4
     # AFTER the tree build: the object-compositor VWF lives in the SYM table's
     # tail, which build_english_tree fills with invalid entries first.
@@ -449,6 +451,182 @@ def build_exe(font_slpm, widths, widths10, slpm):
     _relocate_bank7_base(exe, w32)
     _relocate_name_buffer(exe, w32)
     return exe
+
+
+# ---- Casino minigame prize sprite (Big & Small / Hunter Chance) ------------------------
+# 0x80018f7c renders the winnable item's name into a private 96x12 sprite (context
+# 0x800d24e4, mask 0x801b2e28) that the minigame blits inside its PRIZE panel.  The
+# stock routine centers the name with a lookup table of ten halfwords at 0x80010140
+# -- 48, 42, 36, ..., 6, 0, 0 -- indexed by the name's *character* count, i.e. an
+# indent of (96 - 12*chars)/2 for the fixed 12px Japanese cell, clamped at zero.
+#
+# Two things break for English.  The count is strlen/2, and a name of ten or more
+# characters indexes past the twenty-byte copy the routine makes on its own stack,
+# so the indent is whatever the previous callee left at sp+0x24.  For "Disparalyze"
+# (eleven characters) that is -1: the cursor is read back unsigned at 0x800480c8, so
+# the first glyph lands at x=65535, fails the sprite bounds check, and is dropped --
+# the panel shows "isparalyze".  Even in range the indent is wrong, because kerned
+# English advances 2-10px per character, not 12.
+#
+# Fix: measure the string with the same WTABLE the raw-printer VWF hook uses and
+# center on the real pixel width.  0x80124060 (this routine's private scratch, no
+# other reader in the exe) carries the finished indent instead of the character
+# count, so the table, its stack copy, and the $s6 pointer to it all fall dead.
+PRIZE_CAVE = 0x800d8290            # tofu spare between the map_names strings and the sys printer
+PRIZE_CAVE_END = 0x800d8300        # _install_sys_printer's base
+PRIZE_SPRITE_W = 96                # sprite context 0x800d24e4 +0x18
+
+
+def _patch_casino_prize_sprite(exe, w32, widths):
+    """Center casino prize names on their kerned width instead of a 12px grid."""
+    WTABLE = 0x800d7300
+    ZERO,V0,V1,A0,A1,T0,T1,T2,T3,T4,T5,RA = 0,2,3,4,5,8,9,10,11,12,13,31
+    RI=lambda op,rs,rt,imm:((op&0x3f)<<26)|((rs&0x1f)<<21)|((rt&0x1f)<<16)|(imm&0xffff)
+    LBU=lambda rt,o,rs:RI(0x24,rs,rt,o); ADDIU=lambda rt,rs,i:RI(0x09,rs,rt,i)
+    SLTIU=lambda rt,rs,i:RI(0x0b,rs,rt,i); LUI=lambda rt,i:RI(0x0f,0,rt,i)
+    BEQ=lambda rs,rt,off:RI(0x04,rs,rt,off); BGEZ=lambda rs,off:RI(0x01,rs,1,off)
+    SLL=lambda rd,rt,sa:((rt&0x1f)<<16)|((rd&0x1f)<<11)|((sa&0x1f)<<6)
+    SRA=lambda rd,rt,sa:((rt&0x1f)<<16)|((rd&0x1f)<<11)|((sa&0x1f)<<6)|3
+    ADDU=lambda rd,rs,rt:((rs&0x1f)<<21)|((rt&0x1f)<<16)|((rd&0x1f)<<11)|0x21
+    SUBU=lambda rd,rs,rt:((rs&0x1f)<<21)|((rt&0x1f)<<16)|((rd&0x1f)<<11)|0x23
+    J=lambda t:(0x02<<26)|((t>>2)&0x03ffffff); JAL=lambda t:(0x03<<26)|((t>>2)&0x03ffffff)
+    JR=lambda rs:((rs&0x1f)<<21)|8
+    NOP=0
+    lo=lambda x:x&0xffff; hi=lambda x:((x>>16)+(1 if x&0x8000 else 0))&0xffff
+
+    def sidx(code):
+        b1,b2=code>>8,code&0xff; row=(b1-0x81) if b1<0xa0 else (b1-0xc1); return (b2-0x40)+row*189
+    def measure(text):
+        return sum(widths.get(sidx(ET.fullwidth(ch)),12) for ch in text)
+
+    # Item indices 300+ are the multi-line effect blurbs, never a prize.
+    for name in NT.ITEMS[:300]:
+        if measure(name) > PRIZE_SPRITE_W:
+            raise SystemExit(
+                f"Casino prize sprite: {name!r} is wider than the {PRIZE_SPRITE_W}px panel")
+
+    # a0 = fullwidth SJIS name; returns v0 = max(0, (96 - kerned width) / 2).
+    # Rows 0x81/0x82 take their WTABLE width, everything else the stock 12px cell.
+    # R3000 load-delay slots are respected: no load feeds the next instruction.
+    if WTABLE & 0x8000:
+        raise SystemExit("WTABLE's low half can no longer be folded into the lbu displacement")
+    LOOP,ACC,DONE,POS = 2,14,17,22
+    prog=[LUI(T0,WTABLE>>16),                  # lo(WTABLE) rides the lbu below
+          ADDU(V0,ZERO,ZERO),
+          LBU(T1,0,A0),                        # LOOP
+          LBU(T2,1,A0),
+          0,                                   # beq t1,zero -> DONE (patched below)
+          ADDIU(T3,T1,-0x81),                  # delay slot, harmless when taken
+          SLTIU(T4,T3,2),
+          ADDIU(T5,ZERO,12),                   # stock cell width, kept unless row 0x81/0x82
+          0,                                   # beq t4,zero -> ACC (patched below)
+          SLL(T3,T3,8),                        # delay slot, harmless when taken
+          ADDU(T3,T3,T2), ADDU(T3,T0,T3), LBU(T5,lo(WTABLE),T3),
+          NOP,                                 # t5's load delay
+          ADDU(V0,V0,T5),                      # ACC
+          J(PRIZE_CAVE+LOOP*4), ADDIU(A0,A0,2),
+          ADDIU(T1,ZERO,PRIZE_SPRITE_W),       # DONE
+          SUBU(V0,T1,V0),
+          0,                                   # bgez v0 -> POS (patched below)
+          NOP,
+          ADDU(V0,ZERO,ZERO),                  # wider than the panel: flush left
+          JR(RA), SRA(V0,V0,1)]                # POS
+    prog[4]=BEQ(T1,ZERO,DONE-(4+1))
+    prog[8]=BEQ(T4,ZERO,ACC-(8+1))
+    prog[19]=BGEZ(V0,POS-(19+1))
+
+    # Home: the 0x70 tofu bytes left over when the object-compositor VWF hook moved to
+    # the SYM-table tail, between the relocated map names and the system-string printer
+    # (see map_names.py's cave map).  Tofu placeholder glyphs use no byte but these
+    # three, so anything else here means a neighbour has grown into the gap.
+    span=len(prog)*4
+    if PRIZE_CAVE < MN.CAVE_HI or PRIZE_CAVE+span > PRIZE_CAVE_END:
+        raise SystemExit("casino prize sprite cave collides with a neighbouring reservation")
+    if set(exe[foff(PRIZE_CAVE):foff(PRIZE_CAVE_END)]) - {0x00, 0x06, 0x60}:
+        raise SystemExit(f"casino prize sprite cave {PRIZE_CAVE:#x} is not free tofu")
+    for i,wd in enumerate(prog): w32(PRIZE_CAVE+i*4, wd)
+
+    # address: (stock word, English replacement)
+    patches={
+        0x80019018:(0x0c034427,JAL(PRIZE_CAVE)),   # strlen(name) -> centering indent
+        0x80019030:(0x00021fc2,ADDU(V1,V0,ZERO)),  # was srl $v1,$v0,31 \
+        0x80019034:(0x00621821,NOP),               # was addu $v1,$v1,$v0 } strlen/2
+        0x80019038:(0x00031843,NOP),               # was sra  $v1,$v1,1  /
+        0x80019078:(0x00021040,NOP),               # was sll  $v0,$v0,1   \ table
+        0x8001907c:(0x02c21021,NOP),               # was addu $v0,$s6,$v0 } lookup
+        0x80019080:(0x84450000,ADDU(A1,V0,ZERO)),  # was lh   $a1,($v0)   /
+        # The "ITEM MAX" placeholder shares the panel but is a raw literal at
+        # 0x80010154, so its indent is constant.
+        0x800190ac:(0x00002821,ADDIU(A1,ZERO,(PRIZE_SPRITE_W-measure("ITEM MAX"))//2)),
+    }
+    for address,(stock,replacement) in patches.items():
+        found=struct.unpack_from("<I",exe,foff(address))[0]
+        if found!=stock:
+            raise SystemExit(
+                f"Casino prize sprite {address:#x}: {found:#010x} != {stock:#010x}"
+            )
+        w32(address, replacement)
+
+
+# ---- Dialogue line breaks -------------------------------------------------------------
+# Before drawing a character the box asks whether the NEXT one would still fit, but it
+# measures that hypothetical character with the font's stock 12px cell (0x80048ba0) even
+# though kerned English advances 2-10px.  Any line whose ink ends past 260 of the box's
+# 272px therefore wraps -- including when nothing follows it on that line.  A script CR
+# arriving right after that already-taken wrap lands two lines down and leaves a blank
+# line between the sentences.  Seen on Madam's speech, where 0x268's "and casino we
+# operate," and 0x269's " surrendering themselves" concatenate to 263px just before
+# 0x26a opens with CR.
+#
+# Relaxing the 12px lookahead would let a wide glyph run past the margin and be dropped
+# by the blitter's bounds check, so instead make a break a no-op when the pen is already
+# at the start of a line.  The shared newline routine 0x80047c58 (5 callers: the four
+# dialogue control sites 0x80037d00/d08/dfc/e04 and the raw printer 0x80048094) gains
+# that guard.  Nothing authored depends on a double break: translations.py has no
+# 'CR','CR', and no 'PG' or 'WT' immediately followed by 'CR'.
+# The Cyrillic block starts at 0x800d6966 -- an 18-byte glyph grid is not word-aligned,
+# so round up: MIPS fetches instructions on 4-byte boundaries and J() would truncate.
+LINE_BREAK_CAVE = 0x800d6968       # unused Cyrillic glyphs 567+; see map_names.CAVES
+LINE_BREAK_FN = 0x80047c58
+
+
+def _patch_line_break_guard(exe, w32):
+    """Ignore a line break when the pen already sits at the start of a line."""
+    V0,V1,A0,A1,A2,RA = 2,3,4,5,6,31
+    RI=lambda op,rs,rt,imm:((op&0x3f)<<26)|((rs&0x1f)<<21)|((rt&0x1f)<<16)|(imm&0xffff)
+    LHU=lambda rt,o,rs:RI(0x25,rs,rt,o); LW=lambda rt,o,rs:RI(0x23,rs,rt,o)
+    SH=lambda rt,o,rs:RI(0x29,rs,rt,o);  BEQ=lambda rs,rt,off:RI(0x04,rs,rt,off)
+    ADDU=lambda rd,rs,rt:((rs&0x1f)<<21)|((rt&0x1f)<<16)|((rd&0x1f)<<11)|0x21
+    J=lambda t:(0x02<<26)|((t>>2)&0x03ffffff); JR=lambda rs:((rs&0x1f)<<21)|8
+    NOP=0
+
+    # Stock body, reproduced after the guard: penX = lineStart, penY += cell + spacing.
+    # R3000 load-delay slots are respected: no load feeds the next instruction.
+    RET = 11
+    prog=[LHU(V0,0x20,A0),                     # penX
+          LHU(V1,0x1c,A0),                     # line start
+          LW(A1,0,A0),                         # font descriptor; covers v1's load delay
+          0,                                   # beq v0,v1 -> RET (patched below)
+          SH(V1,0x20,A0),                      # delay slot: rewrites the same value
+          LHU(V0,2,A1), LHU(A2,6,A1), LHU(V1,0x22,A0),
+          ADDU(V0,V0,A2), ADDU(V1,V1,V0), SH(V1,0x22,A0),
+          JR(RA), NOP]                         # RET
+    prog[3]=BEQ(V0,V1,RET-(3+1))
+
+    if LINE_BREAK_CAVE & 3:
+        raise SystemExit("line-break guard cave is not word-aligned")
+    if LINE_BREAK_CAVE + len(prog)*4 > MN.CAVES[0][0]:
+        raise SystemExit("line-break guard overruns the map_names cave")
+    stock=[0x9482001c,0x8c850000,0xa4820020,0x94a30002,0x94a60006,
+           0x94820022,0x00661821,0x00431021,0x03e00008,0xa4820022]
+    for i,expect in enumerate(stock):
+        got=struct.unpack_from("<I",exe,foff(LINE_BREAK_FN+i*4))[0]
+        if got!=expect:
+            raise SystemExit(
+                f"line-break routine {LINE_BREAK_FN+i*4:#x}: {got:#010x} != {expect:#010x}")
+    for i,wd in enumerate(prog): w32(LINE_BREAK_CAVE+i*4, wd)
+    w32(LINE_BREAK_FN, J(LINE_BREAK_CAVE))     # the rest of the stock body falls dead
+    w32(LINE_BREAK_FN+4, NOP)
 
 
 def _patch_message_control_literals(exe, w32):
@@ -547,26 +725,101 @@ def _patch_message_control_literals(exe, w32):
 # Home: the tail of the C/D SYM table.  build_english_tree fills the whole
 # table with entries the decoder can never reach before laying out the (much
 # smaller) English tree, and BP.SYM_TAIL_RESERVE keeps the tree out of the
-# reservation, so [0x80118de8, 0x80119084) is never-written, never-read space.
+# reservation, so [0x80118ce8, 0x80119084) is never-written, never-read space.
+#
+# Shops expose two paths that the raw-string marker wrapper cannot cover:
+# transaction text is appended after control codes (putting 0x1f in the middle
+# of a composed buffer), and comparison/menu labels are drawn directly through
+# the object compositor.  The first two wrappers below expand marker-prefixed
+# ASCII while appending and while drawing an object string, respectively.
 # The expanded raw-printer hook now uses the font cave through 0x800d72f7.
 # Its final eight bytes remain free for these two object-printer scratch values.
 OBJ_SCR12, OBJ_SCR10 = 0x800d72f8, 0x800d72f9
+OBJ_APPEND, OBJ_MARKER = 0x80118ce8, 0x80118d4c
 OBJ_A, OBJ_B, WTABLE10 = 0x80118de8, 0x80118e40, 0x80118e84
 SYM_END = 0x80119084                             # 0x801187a4 + 2272 (table capacity)
 
 def _install_obj_vwf(exe, w32, widths10):
-    OBJ_LOOKUP, OBJ_ADV_RET, WTABLE = 0x8004c55c, 0x8004c794, 0x800d7300
-    ZERO,V0,A0,T6,T7,T8,T9,S2 = 0,2,4,14,15,24,25,18
+    OBJ_LOOKUP, OBJ_GLYPH, OBJ_ADV_RET = 0x8004c55c, 0x8004c5ac, 0x8004c794
+    OBJ_PRINT, OBJ_PRINT_STOCK = 0x8004c7c0, 0x8004c7c8
+    APPEND, APPEND_STOCK = 0x8004a158, 0x8004a160
+    WTABLE, ASCII_TABLE = 0x800d7300, 0x800d8400
+    MARKER = 0x1f
+    ZERO,V0,V1,A0,A1,T0,T1,T2,T3,T6,T7,T8,T9,S0,S1,S2,SP,RA = (
+        0,2,3,4,5,8,9,10,11,14,15,24,25,16,17,18,29,31)
     RI=lambda op,rs,rt,imm:((op&0x3f)<<26)|((rs&0x1f)<<21)|((rt&0x1f)<<16)|(imm&0xffff)
     LBU=lambda rt,o,rs:RI(0x24,rs,rt,o); LHU=lambda rt,o,rs:RI(0x25,rs,rt,o)
-    SB=lambda rt,o,rs:RI(0x28,rs,rt,o);  ADDIU=lambda rt,rs,i:RI(0x09,rs,rt,i)
+    LW=lambda rt,o,rs:RI(0x23,rs,rt,o);  SW=lambda rt,o,rs:RI(0x2b,rs,rt,o)
+    SB=lambda rt,o,rs:RI(0x28,rs,rt,o);  SH=lambda rt,o,rs:RI(0x29,rs,rt,o)
+    ADDIU=lambda rt,rs,i:RI(0x09,rs,rt,i)
     SLTIU=lambda rt,rs,i:RI(0x0b,rs,rt,i); LUI=lambda rt,i:RI(0x0f,0,rt,i)
     BEQ=lambda rs,rt,off:RI(0x04,rs,rt,off); BNE=lambda rs,rt,off:RI(0x05,rs,rt,off)
     SLL=lambda rd,rt,sa:((rt&0x1f)<<16)|((rd&0x1f)<<11)|((sa&0x1f)<<6)
     ADDU=lambda rd,rs,rt:((rs&0x1f)<<21)|((rt&0x1f)<<16)|((rd&0x1f)<<11)|0x21
+    MOVE=lambda rd,rs:ADDU(rd,rs,ZERO)
     J=lambda t:(0x02<<26)|((t>>2)&0x03ffffff); JAL=lambda t:(0x03<<26)|((t>>2)&0x03ffffff)
+    JR=lambda rs:((rs&0x1f)<<21)|8
     NOP=0
     lo=lambda x:x&0xffff; hi=lambda x:((x>>16)+(1 if x&0x8000 else 0))&0xffff
+
+    # The stock append routine copies a source string byte-for-byte into its
+    # destination.  Expand a leading English marker there so a marker appended
+    # after shop control codes cannot become an invalid mid-stream SJIS pair.
+    # Non-English strings reproduce the overwritten load and return to stock.
+    app_loop, app_done, app_stock = 6, 19, 22
+    append_prog=[
+        LBU(V0,0,A1), ADDIU(V1,ZERO,MARKER),
+        0, NOP,                               # bne marker -> stock
+        LW(T0,4,A0), ADDIU(A1,A1,1),          # destination cursor; load delay
+        LBU(V0,0,A1), NOP,                    # loop
+        0, SLL(V1,V0,1),                      # beq NUL -> done
+        LUI(T1,hi(ASCII_TABLE)), ADDIU(T1,T1,lo(ASCII_TABLE)),
+        ADDU(T1,T1,V1), LHU(T2,0,T1), ADDIU(A1,A1,1),
+        SH(T2,0,T0), ADDIU(T0,T0,2),
+        J(OBJ_APPEND+app_loop*4), NOP,
+        SW(T0,4,A0), JR(RA), SB(ZERO,0,T0),   # done
+        LBU(V1,0,A1), J(APPEND_STOCK), NOP,   # stock fallback
+    ]
+    append_prog[2]=BNE(V0,V1,app_stock-(2+1))
+    append_prog[8]=BEQ(V0,ZERO,app_done-(8+1))
+
+    # The direct object path similarly needs to recognize a marker at byte 0.
+    # Translate each one-byte character through the same table used by the raw
+    # printer, then feed one fullwidth SJIS glyph at a time to the stock object
+    # blitter.  Unmarked strings resume at the untouched stock prologue.
+    obj_loop, obj_done, obj_stock = 10, 28, 33
+    marker_prog=[
+        LBU(T0,0,A1), ADDIU(T1,ZERO,MARKER),
+        0, NOP,                               # bne marker -> stock
+        ADDIU(SP,SP,-0x30), SW(RA,0x2c,SP), SW(S0,0x20,SP), SW(S1,0x24,SP),
+        MOVE(S1,A0), ADDIU(S0,A1,1),
+        LBU(T0,0,S0), NOP,                    # loop
+        0, NOP,                               # beq NUL -> done
+        SLL(T1,T0,1), LUI(T2,hi(ASCII_TABLE)), ADDIU(T2,T2,lo(ASCII_TABLE)),
+        ADDU(T2,T2,T1), LHU(T3,0,T2), NOP,
+        SH(T3,0x10,SP), MOVE(A0,S1), ADDIU(A1,SP,0x10), JAL(OBJ_GLYPH), NOP,
+        ADDIU(S0,S0,1), J(OBJ_MARKER+obj_loop*4), NOP,
+        LW(RA,0x2c,SP), LW(S0,0x20,SP), LW(S1,0x24,SP),
+        JR(RA), ADDIU(SP,SP,0x30),             # done
+        ADDIU(SP,SP,-0x20), SW(S1,0x14,SP), J(OBJ_PRINT_STOCK), NOP,
+    ]
+    marker_prog[2]=BNE(T0,T1,obj_stock-(2+1))
+    marker_prog[12]=BEQ(T0,ZERO,obj_done-(12+1))
+
+    if (OBJ_APPEND+len(append_prog)*4!=OBJ_MARKER or
+            OBJ_MARKER+len(marker_prog)*4>OBJ_A or
+            OBJ_APPEND != 0x801187a4+BP.STCAP-BP.SYM_TAIL_RESERVE):
+        raise SystemExit("marker-aware object-printer reservation layout changed; re-check")
+    for address, expected in ((APPEND,0x90a30000), (APPEND+4,0x00000000),
+                              (OBJ_PRINT,0x27bdffe0), (OBJ_PRINT+4,0xafb10014)):
+        got=struct.unpack_from("<I",exe,foff(address))[0]
+        if got!=expected:
+            raise SystemExit(
+                f"marker-aware text site {address:#x}: expected {expected:#010x}, got {got:#010x}")
+    for i,wd in enumerate(append_prog): w32(OBJ_APPEND+i*4, wd)
+    for i,wd in enumerate(marker_prog): w32(OBJ_MARKER+i*4, wd)
+    w32(APPEND,J(OBJ_APPEND)); w32(APPEND+4,NOP)
+    w32(OBJ_PRINT,J(OBJ_MARKER)); w32(OBJ_PRINT+4,NOP)
 
     # Wrapper: zero both scratches; for SJIS rows 0x81/0x82 record both widths.
     # R3000 load-delay slots are respected (a loaded register is never consumed
@@ -603,7 +856,8 @@ def _install_obj_vwf(exe, w32, widths10):
     prog_b[6]=BNE(V0,ZERO,STOCK-(6+1))
     prog_b[10]=BEQ(T8,ZERO,STOCK-(10+1))
     if (OBJ_A+len(prog_a)*4!=OBJ_B or OBJ_B+len(prog_b)*4>WTABLE10 or
-            WTABLE10+512!=SYM_END or OBJ_A-0x801187a4!=BP.STCAP-BP.SYM_TAIL_RESERVE):
+            WTABLE10+512!=SYM_END or
+            OBJ_APPEND-0x801187a4!=BP.STCAP-BP.SYM_TAIL_RESERVE):
         raise SystemExit("object-printer VWF reservation layout changed; re-check")
     for addr, expect in ((0x8004c604,0x0c013157),   # jal 0x8004c55c
                          (0x8004c78c,0x9642000a),   # lhu $v0, 0xa($s2)

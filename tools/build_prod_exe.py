@@ -15,11 +15,12 @@ import build_en_tree as ET
 
 STRUCT=0x80117ec4; SYM=0x801187a4; STCAP=SYM-STRUCT
 AB_STRUCT=0x8010130c; AB_SYM=0x80101978; AB_STCAP=AB_SYM-AB_STRUCT
-# The SYM table's tail hosts the object-compositor VWF hook and its 10px width
-# table (build.py _install_obj_vwf).  build_english_tree pre-fills the whole
-# table with unreachable entries, so keeping the tree below this line leaves
-# the reservation never-read and never-written.
-SYM_TAIL_RESERVE=0x29c
+# The SYM table's tail hosts the marker-aware append/object-printer wrappers,
+# the object-compositor VWF hook, and its 10px width table (build.py
+# _install_obj_vwf).  build_english_tree pre-fills the whole table with
+# unreachable entries, so keeping the tree below this line leaves the
+# reservation never-read and never-written.
+SYM_TAIL_RESERVE=0x39c
 
 # ---- Dictionary runtime layout ----------------------------------------------------
 # Lives in the tail of the rodata font-placeholder cave, AFTER bank 7's relocated
@@ -132,7 +133,11 @@ BIOS_STRCPY = 0x800d107c               # BIOS A(0x19) strcpy thunk: (dst, src)
 # tree can never reach, and grown to 504 bytes.  The cursor global stays at
 # 0x801d1558.  build.py _relocate_name_buffer patches the three code sites
 # that materialize the base; _ab_string_regions excludes the band.
-NAME_INSERT_BUF = STRUCT+STCAP-SYM_TAIL_RESERVE
+# Keep this allocation at its original address.  SYM_TAIL_RESERVE also covers
+# wrappers that live only in the parallel SYM table; moving this STRUCT-table
+# buffer down with that larger reservation would needlessly discard 256 bytes
+# of A/B expansion-string space.
+NAME_INSERT_BUF = 0x80118508
 NAME_INSERT_BUF_WORDS = 0x7e           # zero-fill loop count (504 B)
 assert NAME_INSERT_BUF+NAME_INSERT_BUF_WORDS*4 <= EMIT_GATE
 
