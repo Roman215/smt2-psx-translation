@@ -17,7 +17,7 @@ build tooling. It does not contain, distribute, or download game data.
 Pre-built patches are published on the
 [Releases](https://github.com/Roman215/smt2-psx-translation/releases) page.
 Each release carries two xdelta patches — one with the translated English
-opening movie and one keeping the original Japanese opening movie — plus
+opening and game-over movies and one keeping the original Japanese movies — plus
 `sha256sums.txt` and step-by-step patching instructions. The patches contain
 no game data; apply them to your own verified **Shin Megami Tensei II (Japan)
 (Rev 1)** BIN image with
@@ -32,15 +32,15 @@ To build from source instead, read on.
 - A legally obtained, verified **Shin Megami Tensei II (Japan) (Rev 1)**
   MODE2/2352 BIN image (222,694,416 bytes)
 
-Translating the opening movie uses [FFmpeg](https://ffmpeg.org/download.html)
+Translating the movies uses [FFmpeg](https://ffmpeg.org/download.html)
 from `PATH` (or `--ffmpeg PATH`). The build automatically downloads the pinned
 [`psxavenc` 0.3.1](https://github.com/WonderfulToolchain/psxavenc/releases/tag/v0.3.1)
 release for Windows or Linux when it is not already on `PATH`. It is cached at
 `build/psxavenc/bin/psxavenc.exe` (or `psxavenc` on Linux).
 `--psxavenc PATH` can still be used to select an existing copy. These movie
 tools are optional: if either tool is unavailable, the download fails, or the
-movie cannot be generated for any other reason, the build displays a warning
-and keeps the original Japanese opening movie.
+movies cannot be generated for any other reason, the build displays a warning
+and keeps the original Japanese movies.
 
 [`pyxdelta`](https://pypi.org/project/pyxdelta/) is optional and is needed only
 when building an xdelta patch:
@@ -76,6 +76,7 @@ python -m pip install pyxdelta
 
    - `build/SMT2_EN.bin` — rebuilt game image
    - `build/OPENING_EN.str` — generated fixed-size English opening payload
+   - `build/GAMEOVER_EN.str` — generated fixed-size English game-over payload
 
    To write the generated artifacts somewhere else, pass `--output-dir`:
 
@@ -83,14 +84,14 @@ python -m pip install pyxdelta
    python build.py --output-dir "out"
    ```
 
-   The opening build decodes the movie from the supplied disc, replaces the
-   baked-in Japanese crawl using the game's own font, and re-encodes it at the
-   original 320x240, 15 fps, 10-sectors-per-frame layout. Pass `--skip-opening`
-   for development builds that should retain the Japanese movie without
-   checking for or downloading `psxavenc`. Pass `--require-opening` to abort
-   the build if the movie cannot be generated instead of warning and keeping
-   the Japanese movie — release builds use this so the English-movie patch can
-   never silently ship the wrong movie.
+   The movie build decodes both STRs from the supplied disc, replaces the
+   baked-in Japanese text using the game's own font, and re-encodes them at the
+   original 320x240, 15 fps, 10-sectors-per-frame layouts. Pass `--skip-movies`
+   for development builds that should retain the Japanese movies without
+   checking for or downloading `psxavenc`. Pass `--require-movies` to abort
+   the build if either movie cannot be generated instead of warning and keeping
+   the Japanese movies — release builds use this so the English-movie patch can
+   never silently ship the wrong video.
 
 4. To additionally create `SMT2_EN.xdelta` from the supplied source BIN, install
    `pyxdelta` as shown above and pass `--xdelta`:
@@ -126,8 +127,8 @@ push that no game data is tracked in the repository.
   and `rdlogo.py` — codec and binary-patching support used by the build.
 - `tools/dump_full_script.py` — optional developer utility that dumps the
   source dialogue directly from a supplied BIN.
-- `tools/opening_movie.py` rebuilds the fixed-layout opening STR with the
-  translated crawl.
+- `tools/opening_movie.py` rebuilds the fixed-layout opening and game-over STRs
+  with translated text.
 
 ## Developer utility
 

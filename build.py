@@ -1472,7 +1472,7 @@ def write_patched_bin(
     cmdinit0=None,
     rdlogo=None,
     rdlogo0=None,
-    opening=None,
+    movies=None,
     overlay_files=None,
 ):
     bind=bytearray(Path(input_bin).read_bytes())
@@ -1540,21 +1540,31 @@ def write_patched_bin(
             for i,v in enumerate(subheader): edits.append((sec*2352+16+i,v))
     aff=set()
     for bo,v in edits: bind[bo]=v; aff.add(bo//2352)
-    if opening is not None:
-        expected = OM.OPENING_SECTORS * OM.USER_DATA_SIZE
-        if len(opening) != expected:
+    if movies is not None:
+        expected_names = {spec.filename for spec in OM.MOVIES}
+        if set(movies) != expected_names:
             raise SystemExit(
-                f"rebuilt OPENING.STR has invalid size {len(opening):,}; expected {expected:,}"
+                "rebuilt movie set is incomplete: expected "
+                + ", ".join(sorted(expected_names))
             )
-        # OPENING.STR is a video-only Form 1 stream: one 2048-byte STR chunk
-        # per physical sector.  Write it in place and retain the stock sector
-        # headers/submode flags so no ISO extent or movie seek logic changes.
-        for rel in range(OM.OPENING_SECTORS):
-            sec = OM.OPENING_LBA + rel
-            src = rel * OM.USER_DATA_SIZE
-            dst = sec * 2352 + 24
-            bind[dst:dst+OM.USER_DATA_SIZE] = opening[src:src+OM.USER_DATA_SIZE]
-            aff.add(sec)
+        for spec in OM.MOVIES:
+            payload = movies[spec.filename]
+            expected = spec.sectors * OM.USER_DATA_SIZE
+            if len(payload) != expected:
+                raise SystemExit(
+                    f"rebuilt {spec.filename} has invalid size {len(payload):,}; "
+                    f"expected {expected:,}"
+                )
+            # Each movie is a video-only Form 1 stream: one 2048-byte STR
+            # chunk per physical sector.  Write it in place and retain the
+            # stock sector headers/submode flags so no ISO extent or seek
+            # logic changes.
+            for rel in range(spec.sectors):
+                sec = spec.lba + rel
+                src = rel * OM.USER_DATA_SIZE
+                dst = sec * 2352 + 24
+                bind[dst:dst+OM.USER_DATA_SIZE] = payload[src:src+OM.USER_DATA_SIZE]
+                aff.add(sec)
     for sec in aff:
         so=sec*2352; s=bytearray(bind[so:so+2352]); fix_mode2form1(s); bind[so:so+2352]=s
     output_bin = Path(output_bin)
@@ -1628,7 +1638,7 @@ def find_input_bin(requested=None):
     return path
 
 
-def build_opening_movie(
+def build_movies(
     input_bin,
     executable,
     widths,
@@ -1639,17 +1649,17 @@ def build_opening_movie(
     skip=False,
     required=False,
 ):
-    """Best-effort opening translation; return None to keep the source movie.
+    """Best-effort movie translation; return None to keep the source movies.
 
     With required=True any failure aborts the build instead: release builds
-    must never silently ship the Japanese movie in the English-movie patch.
+    must never silently ship Japanese movies in the English-movie patch.
     """
 
     if skip:
-        print("[3/7] leaving OPENING.STR unchanged (--skip-opening)")
+        print("[3/7] leaving OPENING.STR and GAMEOVER.STR unchanged (--skip-movies)")
         return None
 
-    print("[3/7] rebuilding English OPENING.STR...")
+    print("[3/7] rebuilding English OPENING.STR and GAMEOVER.STR...")
     try:
         local_psxavenc = Path("build/psxavenc/bin") / (
             "psxavenc.exe" if sys.platform == "win32" else "psxavenc"
@@ -1669,29 +1679,32 @@ def build_opening_movie(
         ffmpeg = OM.find_tool(requested_ffmpeg, "ffmpeg", required=False)
         if ffmpeg is None:
             raise RuntimeError("FFmpeg was not found on PATH or at --ffmpeg")
-        opening_path = OM.generate_opening(
+        movie_paths = OM.generate_movies(
             input_bin,
             executable,
             widths,
-            Path(output_dir) / "OPENING_EN.str",
+            output_dir,
             ffmpeg=ffmpeg,
             psxavenc=psxavenc,
         )
-        opening = opening_path.read_bytes()
-        print(
-            f"  opening: {len(opening) // OM.USER_DATA_SIZE} sectors, "
-            f"{OM.FRAME_COUNT} frames"
-        )
-        return opening
+        movies = {}
+        for spec in OM.MOVIES:
+            payload = movie_paths[spec.filename].read_bytes()
+            movies[spec.filename] = payload
+            print(
+                f"  {spec.filename}: {len(payload) // OM.USER_DATA_SIZE} sectors, "
+                f"{spec.frames} frames"
+            )
+        return movies
     except Exception as exc:
         if required:
             raise SystemExit(
-                f"ERROR: the opening movie could not be translated: {exc}\n"
-                "--require-opening forbids falling back to the Japanese movie; "
+                f"ERROR: the movies could not be translated: {exc}\n"
+                "--require-movies forbids falling back to the Japanese movies; "
                 "fix FFmpeg/psxavenc availability or drop the flag."
             ) from exc
-        print(f"  WARNING: the opening movie was not translated: {exc}")
-        print("  WARNING: continuing with the original Japanese movie.")
+        print(f"  WARNING: the movies were not translated: {exc}")
+        print("  WARNING: continuing with the original Japanese movies.")
         return None
 
 
@@ -1705,22 +1718,28 @@ def main(argv=None):
     parser.add_argument(
         "--ffmpeg",
         metavar="EXE",
-        help="optional FFmpeg executable used to decode the opening movie",
+        help="optional FFmpeg executable used to decode the movies",
     )
     parser.add_argument(
         "--psxavenc",
         metavar="EXE",
-        help="optional psxavenc executable used to rebuild the opening movie",
+        help="optional psxavenc executable used to rebuild the movies",
     )
     movie_mode = parser.add_mutually_exclusive_group()
     movie_mode.add_argument(
-        "--skip-opening", action="store_true", help="leave the Japanese opening movie unchanged"
+        "--skip-movies",
+        "--skip-opening",
+        dest="skip_movies",
+        action="store_true",
+        help="leave the Japanese opening and game-over movies unchanged",
     )
     movie_mode.add_argument(
+        "--require-movies",
         "--require-opening",
+        dest="require_movies",
         action="store_true",
-        help="fail the build if the English opening movie cannot be generated, "
-        "instead of falling back to the Japanese movie",
+        help="fail the build if both English movies cannot be generated, "
+        "instead of falling back to the Japanese movies",
     )
     parser.add_argument(
         "--output-dir",
@@ -1780,15 +1799,15 @@ def main(argv=None):
     print("[2/7] kerning font...")
     font_slpm, widths, widths10 = kern_font(slpm)
     _validate_spell_description_widths(widths)
-    opening = build_opening_movie(
+    movies = build_movies(
         input_bin,
         font_slpm,
         widths,
         output_dir,
         requested_ffmpeg=args.ffmpeg,
         requested_psxavenc=args.psxavenc,
-        skip=args.skip_opening,
-        required=args.require_opening,
+        skip=args.skip_movies,
+        required=args.require_movies,
     )
     print("[4/7] building exe (VWF hook + dictionary-compressed C/D tree)...")
     exe = build_exe(font_slpm, widths, widths10, slpm)
@@ -1839,7 +1858,7 @@ def main(argv=None):
         cmdinit0,
         rdlogo,
         rdlogo0,
-        opening,
+        movies,
         overlay_files,
     )
     print(f"DONE. {output_bin}, {sectors} patched sectors, {output_bin.stat().st_size} bytes")

@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """SMT2 PSX translation -- release automation.
 
-Builds the two distributable xdelta patches (translated opening movie and
-original Japanese opening movie), stages release notes and checksums, tags
+Builds the two distributable xdelta patches (translated movies and original
+Japanese movies), stages release notes and checksums, tags
 the version, and creates a GitHub release carrying ONLY the patch files.
 
 Game data never leaves this machine: the build runs locally against your own
@@ -32,7 +32,7 @@ ROOT = Path(__file__).resolve().parent
 VERSION_RE = re.compile(r"^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$")
 RELEASE_BRANCH = "master"
 STAGING_ROOT = ROOT / "build" / "release"
-OPENING_FAILURE_MARKER = "WARNING: the opening movie was not translated"
+MOVIE_FAILURE_MARKER = "WARNING: the movies were not translated"
 
 # The only things a release may upload. Everything else -- above all any
 # BIN/CUE or other game data -- is rejected before gh is ever invoked.
@@ -170,30 +170,30 @@ def preflight(version, args):
     return tag, gh, notes_body, input_bin, build_module
 
 
-def build_variant(staging, name, english_opening, input_bin):
+def build_variant(staging, name, english_movies, input_bin):
     """Run one full build; return the resulting xdelta path."""
     variant_dir = staging / name
     command = [sys.executable, "build.py", "--xdelta", "--output-dir", str(variant_dir)]
-    # --require-opening aborts the build at the movie step, so a failed movie
-    # can never fall back to the Japanese opening in the English-movie patch.
-    command.append("--require-opening" if english_opening else "--skip-opening")
+    # --require-movies aborts the build at the movie step, so a failed movie
+    # can never fall back to Japanese video in the English-movie patch.
+    command.append("--require-movies" if english_movies else "--skip-movies")
     if input_bin is not None:
         command += ["--input", str(input_bin)]
     print(f"\n=== building variant `{name}` ===")
     returncode, output = run_streaming(command)
     if returncode != 0:
         fail(f"build for variant `{name}` failed (exit {returncode})")
-    if english_opening and OPENING_FAILURE_MARKER in output:
-        # Backstop only: --require-opening should already have failed the build.
+    if english_movies and MOVIE_FAILURE_MARKER in output:
+        # Backstop only: --require-movies should already have failed the build.
         fail(
-            "the English-opening build fell back to the Japanese movie "
+            "the English-movie build fell back to Japanese movies "
             "(see WARNING above). Releases must not silently ship the "
             "wrong movie -- fix FFmpeg/psxavenc availability and retry."
         )
-    return verify_variant(staging, name, english_opening)
+    return verify_variant(staging, name, english_movies)
 
 
-def verify_variant(staging, name, english_opening):
+def verify_variant(staging, name, english_movies):
     """Check a built (or --skip-build reused) variant's artifacts."""
     variant_dir = staging / name
     xdelta = variant_dir / "SMT2_EN.xdelta"
@@ -201,8 +201,10 @@ def verify_variant(staging, name, english_opening):
     for artifact in (xdelta, output_bin):
         if not artifact.is_file():
             fail(f"variant `{name}` is missing {artifact}")
-    if english_opening and not (variant_dir / "OPENING_EN.str").is_file():
-        fail(f"variant `{name}` has no OPENING_EN.str; its movie was not translated")
+    if english_movies:
+        for movie in ("OPENING_EN.str", "GAMEOVER_EN.str"):
+            if not (variant_dir / movie).is_file():
+                fail(f"variant `{name}` has no {movie}; its movies were not translated")
     if xdelta.stat().st_size == 0:
         fail(f"variant `{name}` produced an empty xdelta")
     return xdelta
@@ -235,25 +237,25 @@ def assert_assets_safe(assets, expected_bin_size):
 def stage_release(staging, version, en_xdelta, jp_xdelta, input_bin, notes_body, build_module):
     """Copy patches to versioned names; write checksums and release notes."""
     en_name = f"SMT2_EN_v{version}.xdelta"
-    jp_name = f"SMT2_EN_v{version}_JP_opening.xdelta"
+    jp_name = f"SMT2_EN_v{version}_JP_movies.xdelta"
     en_asset = staging / en_name
     jp_asset = staging / jp_name
     shutil.copy2(en_xdelta, en_asset)
     shutil.copy2(jp_xdelta, jp_asset)
 
-    # The English-opening patch rewrites the whole movie region, so it must be
-    # substantially larger than the Japanese-opening patch. Equality means the
-    # movie silently failed to build.
+    # The English-movie patch rewrites both movie regions, so it must be
+    # substantially larger than the Japanese-movie patch. Equality means the
+    # movies silently failed to build.
     if en_asset.stat().st_size < jp_asset.stat().st_size + (1 << 20):
         fail(
-            "the English-opening patch is not meaningfully larger than the "
-            "Japanese-opening patch; the translated movie appears to be missing"
+            "the English-movie patch is not meaningfully larger than the "
+            "Japanese-movie patch; the translated movies appear to be missing"
         )
 
     print("hashing source image and outputs...")
     source_sha = sha256_file(input_bin)
-    en_bin_sha = sha256_file(staging / "en-opening" / "SMT2_EN.bin")
-    jp_bin_sha = sha256_file(staging / "jp-opening" / "SMT2_EN.bin")
+    en_bin_sha = sha256_file(staging / "en-movies" / "SMT2_EN.bin")
+    jp_bin_sha = sha256_file(staging / "jp-movies" / "SMT2_EN.bin")
     en_sha = sha256_file(en_asset)
     jp_sha = sha256_file(jp_asset)
 
@@ -276,8 +278,8 @@ def stage_release(staging, version, en_xdelta, jp_xdelta, input_bin, notes_body,
         "## Downloads\n\n"
         "| File | Contents |\n"
         "| --- | --- |\n"
-        f"| `{en_name}` | Full translation, English opening movie |\n"
-        f"| `{jp_name}` | Full translation, original Japanese opening movie |\n\n"
+        f"| `{en_name}` | Full translation, English opening and game-over movies |\n"
+        f"| `{jp_name}` | Full translation, original Japanese movies |\n\n"
         "The patches contain no game data. You need your own dump of the game;\n"
         "use only an image created from media you own, where permitted by\n"
         "applicable law.\n\n"
@@ -360,11 +362,11 @@ def main(argv=None):
 
     if args.skip_build:
         print("reusing existing build artifacts (--skip-build)")
-        en_xdelta = verify_variant(staging, "en-opening", english_opening=True)
-        jp_xdelta = verify_variant(staging, "jp-opening", english_opening=False)
+        en_xdelta = verify_variant(staging, "en-movies", english_movies=True)
+        jp_xdelta = verify_variant(staging, "jp-movies", english_movies=False)
     else:
-        en_xdelta = build_variant(staging, "en-opening", True, input_bin)
-        jp_xdelta = build_variant(staging, "jp-opening", False, input_bin)
+        en_xdelta = build_variant(staging, "en-movies", True, input_bin)
+        jp_xdelta = build_variant(staging, "jp-movies", False, input_bin)
 
     assets, notes = stage_release(
         staging, version, en_xdelta, jp_xdelta, input_bin, notes_body, build_module

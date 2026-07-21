@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Rebuild SMT2's opening crawl as a video-only PlayStation STR stream.
+"""Rebuild SMT2's subtitled video-only PlayStation STR streams.
 
-The Japanese narration is baked into OPENING.STR.  This module decodes the
-movie from the source BIN, blacks out only the crawl band, draws the English
-copy with the game's own 12x12 font, and feeds the result to psxavenc.  The
-result keeps the stock 1,100-frame, 10-sectors-per-frame layout so it can be
+The Japanese narration is baked into OPENING.STR and GAMEOVER.STR.  This
+module decodes both movies from the source BIN, removes only their Japanese
+text, draws English with the game's own 12x12 font, and feeds the result to
+psxavenc.  Each result keeps its stock frame and sector layout so it can be
 written back in place without moving any ISO files.
 """
 
@@ -18,6 +18,7 @@ import sys
 import tempfile
 import urllib.request
 import zipfile
+from dataclasses import dataclass
 from pathlib import Path
 
 import build_en_tree as ET
@@ -25,13 +26,29 @@ import build_en_tree as ET
 
 SECTOR_SIZE = 2352
 USER_DATA_SIZE = 2048
-OPENING_LBA = 19689
-OPENING_SECTORS = 11000
 FRAME_SECTORS = 10
-FRAME_COUNT = 1100
 WIDTH = 320
 HEIGHT = 240
 FPS = 15
+
+
+@dataclass(frozen=True)
+class MovieSpec:
+    filename: str
+    output_name: str
+    lba: int
+    sectors: int
+    frames: int
+
+
+OPENING = MovieSpec("OPENING.STR", "OPENING_EN.str", 19689, 11000, 1100)
+GAMEOVER = MovieSpec("GAMEOVER.STR", "GAMEOVER_EN.str", 11739, 5650, 565)
+MOVIES = (OPENING, GAMEOVER)
+
+# Compatibility constants used by older tooling and external scripts.
+OPENING_LBA = OPENING.lba
+OPENING_SECTORS = OPENING.sectors
+FRAME_COUNT = OPENING.frames
 
 PSXAVENC_VERSION = "0.3.1"
 PSXAVENC_RELEASE_URL = (
@@ -61,6 +78,23 @@ CRAWL_START = 13.0
 CRAWL_SPEED = 7.1
 CRAWL_LINE_HEIGHT = 16
 CRAWL_COLOR = (18, 78, 75)
+
+GAMEOVER_CLEAN_START = 199       # zero-based frame 200
+GAMEOVER_CLEAN_END = 232         # through frame 232, before the text fade
+GAMEOVER_TEXT_START = 232        # frame 233, first faded text
+GAMEOVER_TEXT_END = 319          # frame 319, last faded text
+GAMEOVER_PATCH_LEFT = 30
+GAMEOVER_PATCH_RIGHT = 290
+GAMEOVER_PATCH_TOP = 141
+GAMEOVER_PATCH_BOTTOM = 200
+GAMEOVER_TEXT_TOP = 148
+GAMEOVER_LINE_HEIGHT = 16
+GAMEOVER_TEXT_COLOR = (240, 240, 240)
+GAMEOVER_LINES = (
+    "Charon: Beyond the river lies the eternal land,",
+    "where the souls of the dead await rebirth.",
+    "Now, cross the river...",
+)
 
 # Physical lines deliberately mirror the Japanese crawl's spacing.  This
 # keeps each thought on screen for about as long as in the stock movie.
@@ -107,7 +141,7 @@ class GameFont:
         try:
             return _sidx(ET.fullwidth(character))
         except KeyError as exc:
-            raise ValueError(f"opening crawl has unsupported character {character!r}") from exc
+            raise ValueError(f"movie text has unsupported character {character!r}") from exc
 
     def advance(self, character: str, fixed: int | None = None) -> int:
         if fixed is not None:
@@ -131,10 +165,15 @@ class GameFont:
         clip_bottom: int = HEIGHT,
         tracking: int = 0,
         fixed: int | None = None,
+        outline: int = 0,
+        outline_color: tuple[int, int, int] = (0, 0, 0),
+        alpha: float = 1.0,
     ) -> None:
-        if not text:
+        if not text or alpha <= 0:
             return
+        alpha = min(alpha, 1.0)
         left = (WIDTH - self.text_width(text, tracking, fixed)) // 2
+        pixels = set()
         for character in text:
             index = self.index(character)
             glyph = self.base + index * GLYPH_BYTES
@@ -147,9 +186,33 @@ class GameFont:
                     if self.executable[glyph + (bit >> 3)] & (1 << (7 - (bit & 7))):
                         px = left + x
                         if 0 <= px < WIDTH:
-                            offset = (py * WIDTH + px) * 3
-                            frame[offset : offset + 3] = bytes(color)
+                            pixels.add((px, py))
             left += self.advance(character, fixed) + tracking
+
+        def paint(points, paint_color):
+            solid = bytes(paint_color)
+            for px, py in points:
+                if not (0 <= px < WIDTH and clip_top <= py < clip_bottom):
+                    continue
+                offset = (py * WIDTH + px) * 3
+                if alpha >= 1:
+                    frame[offset : offset + 3] = solid
+                else:
+                    for component in range(3):
+                        frame[offset + component] = round(
+                            frame[offset + component] * (1 - alpha)
+                            + paint_color[component] * alpha
+                        )
+
+        if outline:
+            outlined = {
+                (px + dx, py + dy)
+                for px, py in pixels
+                for dy in range(-outline, outline + 1)
+                for dx in range(-outline, outline + 1)
+            }
+            paint(outlined - pixels, outline_color)
+        paint(pixels, color)
 
 
 def _read_exact(stream, size: int) -> bytes:
@@ -164,41 +227,144 @@ def _read_exact(stream, size: int) -> bytes:
     return b"".join(chunks)
 
 
-def _extract_raw_opening(input_bin: Path, output: Path) -> None:
+def _extract_raw_movie(input_bin: Path, output: Path, spec: MovieSpec) -> None:
     with input_bin.open("rb") as source, output.open("wb") as target:
-        source.seek(OPENING_LBA * SECTOR_SIZE)
-        remaining = OPENING_SECTORS * SECTOR_SIZE
+        source.seek(spec.lba * SECTOR_SIZE)
+        remaining = spec.sectors * SECTOR_SIZE
         while remaining:
             chunk = source.read(min(1024 * 1024, remaining))
             if not chunk:
-                raise RuntimeError("source BIN ended while extracting OPENING.STR")
+                raise RuntimeError(f"source BIN ended while extracting {spec.filename}")
             target.write(chunk)
             remaining -= len(chunk)
 
     with output.open("rb") as stream:
         first = stream.read(SECTOR_SIZE)
-        stream.seek((OPENING_SECTORS - 1) * SECTOR_SIZE)
+        stream.seek((spec.sectors - 1) * SECTOR_SIZE)
         last = stream.read(SECTOR_SIZE)
     expected = (0x0160, 0x8001, 0, FRAME_SECTORS)
     if struct.unpack_from("<HHHH", first, 24) != expected:
-        raise RuntimeError("unexpected OPENING.STR first-sector header")
+        raise RuntimeError(f"unexpected {spec.filename} first-sector header")
     if struct.unpack_from("<I", first, 32)[0] != 1:
-        raise RuntimeError("unexpected OPENING.STR first frame number")
-    if struct.unpack_from("<I", last, 32)[0] != FRAME_COUNT:
-        raise RuntimeError("unexpected OPENING.STR final frame number")
+        raise RuntimeError(f"unexpected {spec.filename} first frame number")
+    if struct.unpack_from("<I", last, 32)[0] != spec.frames:
+        raise RuntimeError(f"unexpected {spec.filename} final frame number")
+
+
+def _opening_editor(font: GameFont):
+    black_frame = bytes(WIDTH * HEIGHT * 3)
+    black_band = bytes((HEIGHT - CRAWL_TOP) * WIDTH * 3)
+
+    def edit(frame: bytearray, frame_number: int) -> None:
+        timestamp = frame_number / FPS
+
+        # Replace the stock Japanese date card.  Its background is solid
+        # black, so no source art is discarded here.
+        if timestamp < 4.7:
+            frame[:] = black_frame
+            fade = min((timestamp - 0.5) / 0.8, (4.7 - timestamp) / 0.8, 1.0)
+            if fade > 0:
+                color = tuple(round(component * fade) for component in CRAWL_COLOR)
+                font.draw_centered(
+                    frame, "20XX  TOKYO", 95, color, tracking=6, fixed=12
+                )
+
+        # The crawl is entirely below the skyline.  Blank only that black
+        # band, preserving every pixel of the moving city above it.
+        elif timestamp < 58.4:
+            frame[CRAWL_TOP * WIDTH * 3 :] = black_band
+            first_top = 241 - CRAWL_SPEED * (timestamp - CRAWL_START)
+            for line_number, line in enumerate(CRAWL_LINES):
+                top = round(first_top + line_number * CRAWL_LINE_HEIGHT)
+                if top < HEIGHT and top + FONT_HEIGHT > CRAWL_TOP:
+                    font.draw_centered(
+                        frame,
+                        line,
+                        top,
+                        CRAWL_COLOR,
+                        clip_top=CRAWL_TOP,
+                        clip_bottom=HEIGHT,
+                    )
+
+    return edit
+
+
+def _gameover_editor(font: GameFont):
+    clean_frames = []
+    compare_rows = (*range(136, 141), *range(200, 205))
+    compare_columns = range(GAMEOVER_PATCH_LEFT, GAMEOVER_PATCH_RIGHT, 4)
+
+    def boundary_error(frame: bytearray, candidate: bytes) -> int:
+        error = 0
+        for y in compare_rows:
+            for x in compare_columns:
+                offset = (y * WIDTH + x) * 3
+                error += abs(frame[offset] - candidate[offset])
+                error += abs(frame[offset + 1] - candidate[offset + 1])
+                error += abs(frame[offset + 2] - candidate[offset + 2])
+        return error
+
+    def restore_text_band(frame: bytearray) -> None:
+        if len(clean_frames) != GAMEOVER_CLEAN_END - GAMEOVER_CLEAN_START:
+            raise RuntimeError("GAMEOVER.STR clean-frame reservoir is incomplete")
+        clean = min(clean_frames, key=lambda candidate: boundary_error(frame, candidate))
+        feather = 5
+        for y in range(GAMEOVER_PATCH_TOP, GAMEOVER_PATCH_BOTTOM):
+            vertical = min(
+                1.0,
+                (y - GAMEOVER_PATCH_TOP) / feather,
+                (GAMEOVER_PATCH_BOTTOM - 1 - y) / feather,
+            )
+            for x in range(GAMEOVER_PATCH_LEFT, GAMEOVER_PATCH_RIGHT):
+                alpha = min(
+                    vertical,
+                    (x - GAMEOVER_PATCH_LEFT) / feather,
+                    (GAMEOVER_PATCH_RIGHT - 1 - x) / feather,
+                    1.0,
+                )
+                if alpha <= 0:
+                    continue
+                offset = (y * WIDTH + x) * 3
+                for component in range(3):
+                    frame[offset + component] = round(
+                        frame[offset + component] * (1 - alpha)
+                        + clean[offset + component] * alpha
+                    )
+
+    def edit(frame: bytearray, frame_number: int) -> None:
+        if GAMEOVER_CLEAN_START <= frame_number < GAMEOVER_CLEAN_END:
+            clean_frames.append(bytes(frame))
+
+        if GAMEOVER_TEXT_START <= frame_number < GAMEOVER_TEXT_END:
+            restore_text_band(frame)
+            source_frame = frame_number + 1
+            if source_frame <= 236:
+                fade = (0.4, 0.6, 0.8, 1.0)[source_frame - 233]
+            elif source_frame >= 316:
+                fade = (0.85, 0.7, 0.55, 0.4)[source_frame - 316]
+            else:
+                fade = 1.0
+            for line_number, line in enumerate(GAMEOVER_LINES):
+                font.draw_centered(
+                    frame,
+                    line,
+                    GAMEOVER_TEXT_TOP + line_number * GAMEOVER_LINE_HEIGHT,
+                    GAMEOVER_TEXT_COLOR,
+                    outline=1,
+                    alpha=fade,
+                )
+
+    return edit
 
 
 def _render_video(
-    raw_opening: Path,
+    raw_movie: Path,
     output_video: Path,
     ffmpeg: str,
-    executable: bytes,
-    widths: dict[int, int],
+    spec: MovieSpec,
+    edit_frame,
 ) -> None:
     frame_size = WIDTH * HEIGHT * 3
-    font = GameFont(executable, widths)
-    black_frame = bytes(frame_size)
-    black_band = bytes((HEIGHT - CRAWL_TOP) * WIDTH * 3)
 
     decoder = subprocess.Popen(
         [
@@ -209,7 +375,7 @@ def _render_video(
             "-f",
             "psxstr",
             "-i",
-            str(raw_opening),
+            str(raw_movie),
             "-an",
             "-f",
             "rawvideo",
@@ -243,7 +409,7 @@ def _render_video(
             "-level",
             "3",
             "-pix_fmt",
-            "yuv420p",
+            "gbrp",
             str(output_video),
         ],
         stdin=subprocess.PIPE,
@@ -255,53 +421,21 @@ def _render_video(
 
     last_frame = None
     try:
-        for frame_number in range(FRAME_COUNT):
+        for frame_number in range(spec.frames):
             decoded = _read_exact(decoder.stdout, frame_size)
             if len(decoded) != frame_size:
                 raise RuntimeError(
-                    f"FFmpeg decoded only {frame_number}/{FRAME_COUNT} opening frames"
+                    f"FFmpeg decoded only {frame_number}/{spec.frames} "
+                    f"{spec.filename} frames"
                 )
             frame = bytearray(decoded)
-            timestamp = frame_number / FPS
-
-            # Replace the stock Japanese date card.  Its background is solid
-            # black, so no source art is discarded here.
-            if timestamp < 4.7:
-                frame[:] = black_frame
-                fade = min((timestamp - 0.5) / 0.8, (4.7 - timestamp) / 0.8, 1.0)
-                if fade > 0:
-                    color = tuple(round(component * fade) for component in CRAWL_COLOR)
-                    font.draw_centered(
-                        frame,
-                        "20XX  TOKYO",
-                        95,
-                        color,
-                        tracking=6,
-                        fixed=12,
-                    )
-
-            # The crawl is entirely below the skyline.  Blank only that black
-            # band, preserving every pixel of the moving city above it.
-            elif timestamp < 58.4:
-                frame[CRAWL_TOP * WIDTH * 3 :] = black_band
-                first_top = 241 - CRAWL_SPEED * (timestamp - CRAWL_START)
-                for line_number, line in enumerate(CRAWL_LINES):
-                    top = round(first_top + line_number * CRAWL_LINE_HEIGHT)
-                    if top < HEIGHT and top + FONT_HEIGHT > CRAWL_TOP:
-                        font.draw_centered(
-                            frame,
-                            line,
-                            top,
-                            CRAWL_COLOR,
-                            clip_top=CRAWL_TOP,
-                            clip_bottom=HEIGHT,
-                        )
+            edit_frame(frame, frame_number)
 
             encoder.stdin.write(frame)
             last_frame = bytes(frame)
 
         # psxavenc 0.3.1 consumes two look-ahead frames without emitting them.
-        # Two cloned tail frames yield the stock 1,100 encoded frames exactly.
+        # Two cloned tail frames yield the stock frame count exactly.
         assert last_frame is not None
         encoder.stdin.write(last_frame)
         encoder.stdin.write(last_frame)
@@ -322,76 +456,134 @@ def _render_video(
         raise
 
 
-def _validate_strv(path: Path) -> None:
-    expected_size = OPENING_SECTORS * USER_DATA_SIZE
+def _validate_black_first_frame(
+    path: Path, raw_movie: Path, ffmpeg: str, spec: MovieSpec
+) -> None:
+    preview = path.with_suffix(".first-frame.raw")
+    with path.open("rb") as payload, raw_movie.open("rb") as source, preview.open("wb") as out:
+        for _ in range(FRAME_SECTORS):
+            sector = bytearray(source.read(SECTOR_SIZE))
+            chunk = payload.read(USER_DATA_SIZE)
+            if len(sector) != SECTOR_SIZE or len(chunk) != USER_DATA_SIZE:
+                raise RuntimeError(f"could not stage {spec.filename} first-frame validation")
+            sector[24 : 24 + USER_DATA_SIZE] = chunk
+            out.write(sector)
+    try:
+        result = subprocess.run(
+            [
+                ffmpeg,
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-f",
+                "psxstr",
+                "-i",
+                str(preview),
+                "-frames:v",
+                "1",
+                "-f",
+                "rawvideo",
+                "-pix_fmt",
+                "rgb24",
+                "pipe:1",
+            ],
+            check=True,
+            capture_output=True,
+        )
+    finally:
+        preview.unlink(missing_ok=True)
+    frame = result.stdout
+    if len(frame) != WIDTH * HEIGHT * 3 or max(frame, default=255) > 2:
+        raise RuntimeError(
+            f"encoded {spec.filename} does not begin on a true-black frame; "
+            "this can produce a colored startup flicker"
+        )
+
+
+def _validate_strv(path: Path, raw_movie: Path, ffmpeg: str, spec: MovieSpec) -> None:
+    expected_size = spec.sectors * USER_DATA_SIZE
     if path.stat().st_size != expected_size:
         raise RuntimeError(
-            f"encoded OPENING.STR is {path.stat().st_size:,} bytes; "
+            f"encoded {spec.filename} is {path.stat().st_size:,} bytes; "
             f"expected {expected_size:,}"
         )
     with path.open("rb") as stream:
         first = stream.read(USER_DATA_SIZE)
-        stream.seek((OPENING_SECTORS - FRAME_SECTORS) * USER_DATA_SIZE)
+        stream.seek((spec.sectors - FRAME_SECTORS) * USER_DATA_SIZE)
         last_frame = stream.read(USER_DATA_SIZE)
     if struct.unpack_from("<HHHHI", first, 0) != (0x0160, 0x8001, 0, 10, 1):
-        raise RuntimeError("encoded OPENING.STR has an unexpected first frame header")
+        raise RuntimeError(f"encoded {spec.filename} has an unexpected first frame header")
     if struct.unpack_from("<HHHHI", last_frame, 0) != (
         0x0160,
         0x8001,
         0,
         10,
-        FRAME_COUNT,
+        spec.frames,
     ):
-        raise RuntimeError("encoded OPENING.STR has an unexpected final frame header")
+        raise RuntimeError(f"encoded {spec.filename} has an unexpected final frame header")
+    _validate_black_first_frame(path, raw_movie, ffmpeg, spec)
 
 
-def generate_opening(
+def generate_movies(
     input_bin: str | Path,
     executable: bytes,
     widths: dict[int, int],
-    output: str | Path,
+    output_directory: str | Path,
     *,
     ffmpeg: str,
     psxavenc: str,
-) -> Path:
-    """Generate a fixed-size English OPENING.STR payload and return its path."""
+) -> dict[str, Path]:
+    """Generate fixed-size English movie payloads keyed by disc filename."""
 
     input_bin = Path(input_bin)
-    output = Path(output)
-    output.parent.mkdir(parents=True, exist_ok=True)
-    # Stage on the output's drive: the final Path.replace is a rename, and
+    output_directory = Path(output_directory)
+    output_directory.mkdir(parents=True, exist_ok=True)
+    # Stage on the output drive: each final Path.replace is a rename, and
     # Windows cannot rename across drives (the default temp dir may be on C:).
     with tempfile.TemporaryDirectory(
-        prefix="smt2-opening-", dir=output.parent
+        prefix="smt2-movies-", dir=output_directory
     ) as temporary:
         temporary = Path(temporary)
-        raw_opening = temporary / "OPENING_raw.str"
-        translated_video = temporary / "OPENING_EN.mkv"
-        encoded_opening = temporary / "OPENING_EN.str"
-        _extract_raw_opening(input_bin, raw_opening)
-        _render_video(raw_opening, translated_video, ffmpeg, executable, widths)
-        subprocess.run(
-            [
-                psxavenc,
-                "-q",
-                "-t",
-                "strv",
-                "-v",
-                "v2",
-                "-s",
-                f"{WIDTH}x{HEIGHT}",
-                "-r",
-                str(FPS),
-                "-x",
-                "2",
-                str(translated_video),
-                str(encoded_opening),
-            ],
-            check=True,
-        )
-        _validate_strv(encoded_opening)
-        encoded_opening.replace(output)
-    return output
+        font = GameFont(executable, widths)
+        encoded = {}
+        for spec, editor in (
+            (OPENING, _opening_editor(font)),
+            (GAMEOVER, _gameover_editor(font)),
+        ):
+            stem = Path(spec.filename).stem
+            raw_movie = temporary / f"{stem}_raw.str"
+            translated_video = temporary / f"{stem}_EN.mkv"
+            encoded_movie = temporary / spec.output_name
+            _extract_raw_movie(input_bin, raw_movie, spec)
+            _render_video(raw_movie, translated_video, ffmpeg, spec, editor)
+            subprocess.run(
+                [
+                    psxavenc,
+                    "-q",
+                    "-t",
+                    "strv",
+                    "-v",
+                    "v2",
+                    "-s",
+                    f"{WIDTH}x{HEIGHT}",
+                    "-r",
+                    str(FPS),
+                    "-x",
+                    "2",
+                    str(translated_video),
+                    str(encoded_movie),
+                ],
+                check=True,
+            )
+            _validate_strv(encoded_movie, raw_movie, ffmpeg, spec)
+            encoded[spec.filename] = encoded_movie
+
+        outputs = {}
+        for spec in MOVIES:
+            output = output_directory / spec.output_name
+            encoded[spec.filename].replace(output)
+            outputs[spec.filename] = output
+    return outputs
 
 
 def download_psxavenc(install_directory: str | Path) -> Path:
@@ -465,4 +657,4 @@ def find_tool(
     if not required:
         return None
     hint = f" (or pass its path explicitly)" if requested is None else ""
-    raise SystemExit(f"Required opening-movie tool not found: {name}{hint}")
+    raise SystemExit(f"Required movie tool not found: {name}{hint}")

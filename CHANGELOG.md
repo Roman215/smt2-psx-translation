@@ -13,11 +13,21 @@ your own verified source image.
 
 ## [Unreleased]
 
+### Added
+
+- Translated Charon's baked-in game-over movie dialogue while retaining its
+  original fade timing and moving background.
+- Generalized movie builds and release variants to cover all translated or
+  original Japanese movies, including the new `_JP_movies.xdelta` filename.
+
 ### Fixed
 
 - Translated the raw battle action prompts used by the Triangle status view
   and individual combatant selection, along with the related COMP activation
   label.
+- Removed the colored flash at the start of rebuilt movies by preserving
+  full-range black through the lossless encoding stage and validating the
+  first encoded frame.
 
 ## [0.1.4] - 2026-07-20
 
