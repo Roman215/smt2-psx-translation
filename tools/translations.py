@@ -1798,7 +1798,7 @@ TRANS = {
       "Each win doubles your Coins,",'CR',"but one loss takes everything.",'WT','PG',
       "Win big prizes in",'CR',"HUNTER CHANCE!",'WT','ED'],
     0x2033:["Mr. Nandi: Namaste!",'CR',"I am Mr. Nandi from India!",'WT',
-      "We met? Long time no see!",'WT',
+      "If we've met before, long time no see!",'WT',
       "Play Code Breaker, yes?",'CR',"Guess the number using hints.",'CR',
       "Very easy!",'WT','ED'],
     0x2034:['PG',"What will you do?",'ED'],

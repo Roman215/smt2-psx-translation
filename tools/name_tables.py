@@ -21,7 +21,7 @@ DEMONS = [
  "Naga","Nozuchi","Hanuman","Ganesha","Djinn","Tengu","Haokah","Mercurius","Cerberus","Gdon","Selket",
  "Orthrus","Nekomata","Cu Sith","Cait Sith","Nyx","Vampire","Lilim","Nightmare","Empusa","Alp","Titan",
  "Ubelluris","Tsuchigumo","Duergar","Sudama","Knocker","Titania","Oberon","Cu Chulain","Nadja","Banshee",
- "Dark Elf","Jack O'Lantern","Jack Frost","High Pixie","Frankie","Demi-Nandi","Heracles","Slave",
+ "Dark Elf","Pyro Jack","Jack Frost","High Pixie","Frankie","Demi-Nandi","Heracles","Slave",
  "Oracles","Spartan","Agares","Gaap","Berith","Baphomet","Eligor","Betelgeuse","Gagyson","Ukobach",
  "Yaksha","Shuten-Doji","Yakshini","Turdak","Hannya","Azumi","Ihika","Rangda","Volvo","Gorgon",
  "Cailleach Bheare","Arachne","Lamia","Hag","Kamen-Hijiri","Ashura","Onmyoji","Jiraiya","Kugutsushi",

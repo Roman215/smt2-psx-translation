@@ -12,10 +12,11 @@ renders on two lines).
 English names run longer than the katakana, so we RELOCATE the translated strings into
 the free rodata font-placeholder cave and REPOINT both tables. No code changes.
 
-Cave: two spans, see CAVES.  0x800d7500 .. 0x800d8290 is the original font-placeholder
-run; 0x800d8290 .. 0x800d8300 now holds build.py's casino prize-name measuring routine
-(it had been spare since the object-compositor VWF hook moved to the SYM-table tail),
-then the marker-based system-string printer and its ASCII/SJIS table at
+Cave: two spans, see CAVES.  0x800d7500 .. 0x800d8100 is part of the original
+font-placeholder run.  The remainder is reserved by build.py for its compact
+demon-name cache converter at 0x800d8100, cached-name glyph migrator at
+0x800d8180, casino prize-name measuring routine at 0x800d8290, and the
+marker-based system-string printer/ASCII table at
 0x800d8300 .. 0x800d8500.
 
 The '@' break is INVISIBLE: it splits the two-line save/load display but contributes
@@ -45,8 +46,12 @@ STR_LO, STR_HI = 0x80016000, 0x80017000     # original string block bounds
 # game reaches them -- scanning the exe, every overlay and ZZZZZZZZ.ZZZ found neither a
 # string using those codepoints nor a pointer into the range.  The block starts at
 # 0x800d6966; build.py's line-break guard takes its first 0x3a bytes.
-CAVES = ((0x800d69a0, 0x800d7014), (0x800d7500, 0x800d8290))
-CAVE_HI = CAVES[-1][1]                        # 0x800d8290+ reserved by build.py
+DEMON_NAME_CACHE_CAVE = 0x800d8100
+DEMON_NAME_CACHE_CAVE_END = 0x800d8180
+DEMON_NAME_MIGRATOR_CAVE = 0x800d8180
+DEMON_NAME_MIGRATOR_CAVE_END = 0x800d8290
+CAVES = ((0x800d69a0, 0x800d7014), (0x800d7500, DEMON_NAME_CACHE_CAVE))
+CAVE_HI = CAVES[-1][1]                        # 0x800d8100+ reserved by build.py
 BR = 0x8197                                   # line-break control char (invisible)
 
 # English for each unique string, in ASCENDING-ADDRESS order (must be exactly 144 long).

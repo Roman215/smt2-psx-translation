@@ -13,15 +13,46 @@ your own verified source image.
 
 ## [Unreleased]
 
+## [0.1.5] - 2026-07-22
+
+This release substantially improves demon negotiation and makes long English
+names safe and readable throughout the interface. It also translates several
+missed prompts and fixes presentation problems in shops, Cathedral fusion,
+battle menus, movies, and other text-heavy screens.
+
 ### Added
 
 - Translated Charon's baked-in game-over movie dialogue while retaining its
   original fade timing and moving background.
-- Generalized movie builds and release variants to cover all translated or
-  original Japanese movies, including the new `_JP_movies.xdelta` filename.
+- Translated the previously missed Center elevator prompt and floor labels.
+
+### Changed
+
+- Reworked demon negotiation directly from the original Japanese and audited
+  every reachable combination of its interchangeable dialogue fragments.
+  Questions, answers, and outcomes now join into natural English regardless of
+  which route the game selects.
+- Reviewed every negotiation YES/NO prompt and every prompt-specific response
+  set so the available answers match the question being asked.
+- Redesigned the negotiation response panel to accommodate four choices, the
+  longest English response, and two-line prompts without clipping or covering
+  text. Multiword responses now use sentence case.
+- Renamed Jack O'Lantern to Pyro Jack.
+- Generalized movie builds and release variants to cover both translated and
+  original Japanese movies; the latter now use the clearer
+  `_JP_movies.xdelta` filename.
 
 ### Fixed
 
+- Fixed long demon names corrupting the following party record. Names such as
+  Yamata-no-Orochi now display completely in party panels, status screens, and
+  Cathedral fusion menus without wrapping over themselves or crowding nearby
+  statistics.
+- Widened and reorganized the Cathedral's race, demon-name, result, level, and
+  affinity columns so the full English names remain readable on every fusion
+  selection screen.
+- Fixed missing spaces and speaker colons around inserted hero, heroine, party,
+  NPC, and demon names throughout dialogue.
 - Restored English text throughout weapon, armor, and item shops, including
   clerk dialogue, Buy/Sell choices, item details, and the blue comparison
   panels' stat and equipment captions.
@@ -41,6 +72,8 @@ your own verified source image.
 - Restored the separator between the two halves of a place name on one-line
   displays such as the Automap header, which ran them together
   ("Madam'sManor", "KeterCastle 8F").
+- Removed stray roster markers that could overlap the first letter of party
+  member names in Church and field interfaces.
 
 ## [0.1.4] - 2026-07-20
 
@@ -170,7 +203,8 @@ First public release.
 - Reproducible build (`build.py`) that patches a verified Japan Rev 1 image
   and emits distributable xdelta patches.
 
-[Unreleased]: https://github.com/Roman215/smt2-psx-translation/compare/v0.1.4...HEAD
+[Unreleased]: https://github.com/Roman215/smt2-psx-translation/compare/v0.1.5...HEAD
+[0.1.5]: https://github.com/Roman215/smt2-psx-translation/compare/v0.1.4...v0.1.5
 [0.1.4]: https://github.com/Roman215/smt2-psx-translation/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/Roman215/smt2-psx-translation/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/Roman215/smt2-psx-translation/compare/v0.1.1...v0.1.2

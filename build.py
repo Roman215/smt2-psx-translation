@@ -228,6 +228,25 @@ def foff(a): return (a - 0x80010000) + 0x800
 # Punctuation kerned in both fullwidth fonts (names/dialogue repertoire).
 KERN_PUNCT = [0x8149,0x8148,0x8144,0x8143,0x8146,0x8147,0x8151,0x815e,0x8184,0x8166,0x8165,0x8168,
               0x8167,0x815d,0x8169,0x816a,0x8163,0x8160,0x8192,0x817b,0x8195,0x8193]
+# Unassigned SJIS cells used only when rendering cached Yamata-no-Orochi names.
+# Their 10x10 and 12x12 glyphs are one pixel narrower than the corresponding
+# normal a/o/m/r glyphs, while retaining a true blank tracking column after
+# every character.
+FIELD_NARROW_GLYPHS = {
+    "a": 0x827a,
+    "o": 0x827b,
+    "m": 0x827c,
+    "r": 0x827d,
+}
+# One-byte tokens stored only inside Yamata's marker-prefixed cached name.
+# Both global marker printers translate them to FIELD_NARROW_GLYPHS, allowing
+# the raw and object-compositor paths to share the same compact rendering.
+FIELD_NARROW_SENTINELS = {
+    "a": 0x01,
+    "o": 0x02,
+    "m": 0x03,
+    "r": 0x04,
+}
 
 # ============================ 1. FONT KERNING ============================
 def kern_font(slpm):
@@ -269,6 +288,30 @@ def kern_font(slpm):
     for c in range(0x824f,0x8259): widths[sidx(c)] = kern(sidx(c))   # 0-9
     for c in KERN_PUNCT: widths[sidx(c)] = kern(sidx(c))
     widths[0] = 4  # space
+
+    # Some party panels use a separate 12x12 name renderer.  Populate the same
+    # private SJIS cells in this atlas so the cached-name tokens work through
+    # either printer.
+    for char, dst_code in FIELD_NARROW_GLYPHS.items():
+        src_index = sidx(ET.fullwidth(char))
+        dst_index = sidx(dst_code)
+        rows = get_glyph(src_index)
+        columns = [x for y in range(H) for x in range(W) if rows[y][x]]
+        lo_c, hi_c = min(columns), max(columns)
+        source_width = hi_c - lo_c + 1
+        target_width = source_width - 1
+        if target_width < 2:
+            raise SystemExit(f"cannot make compact 12px field glyph {char!r} narrower")
+        compact = [[0] * W for _ in range(H)]
+        for y in range(H):
+            for x in range(lo_c, hi_c + 1):
+                if not rows[y][x]:
+                    continue
+                nx = ((x - lo_c) * (target_width - 1) +
+                      (source_width - 1) // 2) // (source_width - 1)
+                compact[y][nx] = 1
+        set_glyph(dst_index, compact)
+        widths[dst_index] = target_width + 1
 
     # 10x10 font (0x800d25d8, SJIS rows 0x81-0x83 only).  100 bits per glyph, so
     # glyph boundaries are not byte-aligned -- address pixels by absolute bit.
@@ -345,6 +388,47 @@ def kern_font(slpm):
     for c in KERN_PUNCT: widths10[sidx(c)] = kern10(sidx(c))
     widths10[0] = 4  # space
 
+    # Yamata-no-Orochi is seven pixels wider than the field HUD's 80px name
+    # strip.  Give that one call site alternate a/o/m/r glyphs: their actual
+    # ink is compressed from N columns to N-1 and their advance is N, leaving
+    # one blank column.  Reducing only the normal glyph advances made unrelated
+    # pairs such as "an" and "ae" touch visually.
+    for char, dst_code in FIELD_NARROW_GLYPHS.items():
+        src_index = sidx(ET.fullwidth(char))
+        dst_index = sidx(dst_code)
+        src_start = src_index * W10 * H10
+        dst_start = dst_index * W10 * H10
+        rows = [
+            [bit10(src_start + y * W10 + x) for x in range(W10)]
+            for y in range(H10)
+        ]
+        columns = [x for y in range(H10) for x in range(W10) if rows[y][x]]
+        lo_c, hi_c = min(columns), max(columns)
+        source_width = hi_c - lo_c + 1
+        target_width = source_width - 1
+        if target_width < 2:
+            raise SystemExit(f"cannot make compact field glyph {char!r} narrower")
+        for pixel in range(W10 * H10):
+            setbit10(dst_start + pixel, 0)
+        for y in range(H10):
+            for x in range(lo_c, hi_c + 1):
+                if not rows[y][x]:
+                    continue
+                # Nearest-column resampling, with endpoints preserved.
+                nx = ((x - lo_c) * (target_width - 1) +
+                      (source_width - 1) // 2) // (source_width - 1)
+                setbit10(dst_start + y * W10 + nx, 1)
+        widths10[dst_index] = target_width + 1
+
+    # Fullwidth asterisk (SJIS 0x8196) is used as a compact-font party marker
+    # in roster UIs such as the church healing list.  English names now begin
+    # at the marker's old position, so retaining it draws the star underneath
+    # the first letter.  Blank only its 10x10 glyph: dialogue uses the separate
+    # 12x12 font, preserving intentional stage directions such as *blush*.
+    compact_asterisk = sidx(0x8196) * W10 * H10
+    for pixel in range(W10 * H10):
+        setbit10(compact_asterisk + pixel, 0)
+
     # The greyed YES/NO confirm options draw ＹＥＳ/ＮＯ through the game's only
     # 10x10 text context, where the stock heavy capitals visually matched the
     # bold selected-option overlay.  Preserve those five stock glyphs in the
@@ -368,7 +452,8 @@ def build_exe(font_slpm, widths, widths10, slpm):
     def w32(a, v): struct.pack_into("<I", exe, foff(a), v)
     CAVE, RAW_CAVE, WTABLE = 0x800d7254, 0x800d7294, 0x800d7300
     BACK, RAW_BACK = 0x80048b88, 0x80048284
-    R = {'zero':0,'v0':2,'v1':3,'a0':4,'a2':6,'t6':14,'t7':15,'s2':18,'t8':24,'t9':25,'sp':29}
+    R = {'zero':0,'v0':2,'v1':3,'a0':4,'a1':5,'a2':6,
+         't6':14,'t7':15,'s2':18,'t8':24,'t9':25,'sp':29}
     I = lambda op,rs,rt,imm: ((op&0x3f)<<26)|((R[rs]&0x1f)<<21)|((R[rt]&0x1f)<<16)|(imm&0xffff)
     Rr = lambda rs,rt,rd,sa,fn: ((R[rs]&0x1f)<<21)|((R[rt]&0x1f)<<16)|((R[rd]&0x1f)<<11)|((sa&0x1f)<<6)|(fn&0x3f)
     lbu=lambda rt,o,rs:I(0x24,rs,rt,o); lhu=lambda rt,o,rs:I(0x25,rs,rt,o)
@@ -395,6 +480,10 @@ def build_exe(font_slpm, widths, widths10, slpm):
     #
     # At the hook site a0 is the glyph descriptor.  Preserve its original
     # width in v1 as the fallback for 8px fonts and non-Latin characters.
+    # The overwritten instruction at 0x80048280 also loads descriptor+4 into
+    # a1 (the font's extra spacing).  Restore that load in both return-jump
+    # delay slots; omitting it leaves a pixel mask in a1, making the pen jump
+    # far enough to wrap long names back over the start of a 96px surface.
     raw_hook=[lhu('v1',0,'a0'),
               lbu('t6',0x10,'sp'),lbu('t7',0x11,'sp'),
               addiu('t9','t6',-0x81),sltiu('t8','t9',2),
@@ -408,8 +497,8 @@ def build_exe(font_slpm, widths, widths10, slpm):
               0,0,                                 # bne t6,zero -> STOCK; nop
               lui('t8',hi(WTABLE)),addiu('t8','t8',lo(WTABLE)),
               addu('t9','t9','t7'),                # COMMON
-              addu('t8','t8','t9'),lbu('v1',0,'t8'),jj(RAW_BACK),0,
-              jj(RAW_BACK),0]                      # STOCK
+              addu('t8','t8','t9'),lbu('v1',0,'t8'),jj(RAW_BACK),lhu('a1',4,'a0'),
+              jj(RAW_BACK),lhu('a1',4,'a0')]        # STOCK
     RAW_CHECK12, RAW_COMMON, RAW_STOCK = 13,18,23
     raw_hook[5]=beq('t8','zero',((RAW_CAVE+RAW_STOCK*4)-((RAW_CAVE+5*4)+4))>>2)
     raw_hook[7]=bne('zero','t6',((RAW_CAVE+RAW_CHECK12*4)-((RAW_CAVE+7*4)+4))>>2)
@@ -431,6 +520,7 @@ def build_exe(font_slpm, widths, widths10, slpm):
     for c in range(0x8281,0x829b): setw(c)
     for c in range(0x824f,0x8259): setw(c)
     for c in KERN_PUNCT: setw(c)
+    for c in FIELD_NARROW_GLYPHS.values(): setw(c)
     tbl[0x40]=widths.get(0,4)
     for i in range(512): exe[foff(WTABLE)+i]=tbl[i]
     w32(0x80048b80, jj(CAVE))
@@ -447,6 +537,10 @@ def build_exe(font_slpm, widths, widths10, slpm):
     # each byte to the corresponding existing fullwidth SJIS glyph before calling the stock blit,
     # so they retain this same VWF/font while unmarked Japanese remains on the stock path.
     _install_sys_printer(exe, w32)
+    _install_compact_demon_name_cache(exe, w32)
+    _install_compact_name_migrator(exe, w32)
+    _patch_elevator_floor_labels(exe, w32)
+    _patch_long_demon_name_layouts(exe, widths, widths10)
     _patch_message_control_literals(exe, w32)
     _relocate_bank7_base(exe, w32)
     _relocate_name_buffer(exe, w32)
@@ -744,6 +838,7 @@ def _install_obj_vwf(exe, w32, widths10):
     OBJ_PRINT, OBJ_PRINT_STOCK = 0x8004c7c0, 0x8004c7c8
     APPEND, APPEND_STOCK = 0x8004a158, 0x8004a160
     WTABLE, ASCII_TABLE = 0x800d7300, 0x800d8400
+    MIGRATOR = MN.DEMON_NAME_MIGRATOR_CAVE
     MARKER = 0x1f
     ZERO,V0,V1,A0,A1,T0,T1,T2,T3,T6,T7,T8,T9,S0,S1,S2,SP,RA = (
         0,2,3,4,5,8,9,10,11,14,15,24,25,16,17,18,29,31)
@@ -787,11 +882,12 @@ def _install_obj_vwf(exe, w32, widths10):
     # Translate each one-byte character through the same table used by the raw
     # printer, then feed one fullwidth SJIS glyph at a time to the stock object
     # blitter.  Unmarked strings resume at the untouched stock prologue.
-    obj_loop, obj_done, obj_stock = 10, 28, 33
+    obj_loop, obj_done, obj_stock = 12, 30, 35
     marker_prog=[
         LBU(T0,0,A1), ADDIU(T1,ZERO,MARKER),
         0, NOP,                               # bne marker -> stock
         ADDIU(SP,SP,-0x30), SW(RA,0x2c,SP), SW(S0,0x20,SP), SW(S1,0x24,SP),
+        JAL(MIGRATOR), NOP,
         MOVE(S1,A0), ADDIU(S0,A1,1),
         LBU(T0,0,S0), NOP,                    # loop
         0, NOP,                               # beq NUL -> done
@@ -804,7 +900,7 @@ def _install_obj_vwf(exe, w32, widths10):
         ADDIU(SP,SP,-0x20), SW(S1,0x14,SP), J(OBJ_PRINT_STOCK), NOP,
     ]
     marker_prog[2]=BNE(T0,T1,obj_stock-(2+1))
-    marker_prog[12]=BEQ(T0,ZERO,obj_done-(12+1))
+    marker_prog[14]=BEQ(T0,ZERO,obj_done-(14+1))
 
     if (OBJ_APPEND+len(append_prog)*4!=OBJ_MARKER or
             OBJ_MARKER+len(marker_prog)*4>OBJ_A or
@@ -870,7 +966,8 @@ def _install_obj_vwf(exe, w32, widths10):
     tbl=bytearray([10])*512
     def sidx(code):
         b1,b2=code>>8,code&0xff; row=(b1-0x81) if b1<0xa0 else (b1-0xc1); return (b2-0x40)+row*189
-    for code in ([*range(0x8260,0x827a), *range(0x8281,0x829b)] + KERN_PUNCT):
+    for code in ([*range(0x8260,0x827a), *range(0x8281,0x829b)] +
+                 KERN_PUNCT + list(FIELD_NARROW_GLYPHS.values())):
         v=widths10.get(sidx(code))
         if v is not None: tbl[((code>>8)-0x81)*256+(code&0xff)]=v
     tbl[0x40]=widths10.get(0,4)
@@ -983,6 +1080,7 @@ def apply_cmdinit_names(cmdinit, names=None):
 # to 0x800482ac, leaving every original Japanese caller byte-for-byte compatible.
 def _install_sys_printer(exe, w32):
     PR, TABLE, BLIT, STOCK = 0x800d8300, 0x800d8400, 0x80048048, 0x800482ac
+    MIGRATOR = MN.DEMON_NAME_MIGRATOR_CAVE
     MARKER = 0x1f
     ZERO,T0,T1,T2,T3,A0,A1,S0,S1,SP,RA = 0,8,9,10,11,4,5,16,17,29,31
     def RI(op,rs,rt,imm): return ((op&0x3f)<<26)|((rs&0x1f)<<21)|((rt&0x1f)<<16)|(imm&0xffff)
@@ -999,21 +1097,22 @@ def _install_sys_printer(exe, w32):
     prog = [
         LBU(T0,0,A1), ADDIU(T1,ZERO,MARKER), 0, NOP,
         ADDIU(SP,SP,-0x30), SW(RA,0x2c,SP), SW(S0,0x20,SP), SW(S1,0x24,SP),
+        JAL(MIGRATOR), NOP,
         MOVE(S1,A0), ADDIU(S0,A1,1),
-        # loop @10
+        # loop @12
         # The PSX R3000 exposes load-delay slots: do not consume LBU/LHU results in
         # the immediately following instruction.
         LBU(T0,0,S0), NOP, 0, NOP,
         SLL(T1,T0,1), LUI(T2,thi), ADDIU(T2,T2,tlo), ADDU(T2,T2,T1),
         LHU(T3,0,T2), NOP, SH(T3,0x10,SP), MOVE(A0,S1), ADDIU(A1,SP,0x10), JAL(BLIT), NOP,
-        ADDIU(S0,S0,1), J(PR+10*4), NOP,
-        # end @28
+        ADDIU(S0,S0,1), J(PR+12*4), NOP,
+        # end @30
         LW(RA,0x2c,SP), LW(S0,0x20,SP), LW(S1,0x24,SP), JR(RA), ADDIU(SP,SP,0x30),
-        # stock fallback @33: reproduce 0x800482a4/a8, then continue at 0x800482ac
+        # stock fallback @35: reproduce 0x800482a4/a8, then continue at 0x800482ac
         ADDIU(SP,SP,-0x20), SW(S0,0x10,SP), J(STOCK), NOP,
     ]
-    prog[2] = BNE(T0,T1,33-(2+1))
-    prog[12] = BEQ(T0,ZERO,28-(12+1))
+    prog[2] = BNE(T0,T1,35-(2+1))
+    prog[14] = BEQ(T0,ZERO,30-(14+1))
     for i,wd in enumerate(prog): w32(PR+i*4, wd)
 
     # Raw-byte table: lhu/sh preserves the big-endian SJIS byte pair in memory.
@@ -1029,8 +1128,329 @@ def _install_sys_printer(exe, w32):
             table += struct.pack(">H", ET.fullwidth(char))
         except (KeyError, ValueError):
             table += struct.pack(">H", ET.fullwidth("?"))
+    for char, sentinel in FIELD_NARROW_SENTINELS.items():
+        table[sentinel * 2:sentinel * 2 + 2] = struct.pack(
+            ">H", FIELD_NARROW_GLYPHS[char]
+        )
     exe[foff(TABLE):foff(TABLE)+len(table)] = table
     w32(0x800482a4, J(PR)); w32(0x800482a8, NOP)
+
+
+# ---- Safe cached demon names + long-name layouts --------------------------------------
+# A party record is 0x70 bytes and its cached name begins at +0x5d, leaving only
+# 19 bytes through the end of the record.  Stock Japanese names fit as at most nine
+# two-byte glyphs plus NUL.  English ``Yamata-no-Orochi`` needs 33 bytes in that
+# representation, so the stock strcpy at 0x801f37d4 overwrites fourteen bytes of the
+# following party record before any screen gets a chance to clip the text.
+#
+# Store translated demon names as the same marker-prefixed one-byte English accepted
+# by both global printers.  The tiny converter below runs only when a demon record is
+# initialized: it maps the decoder's fullwidth SJIS back through ASCII_TABLE, producing
+# [0x1f][up to 17 ASCII bytes][NUL].  Human-entered names retain their stock fullwidth
+# copy path at 0x801f3c0c.
+DEMON_NAME_CACHE_FIELD_SIZE = 19
+DEMON_NAME_CACHE_CONVERTER = MN.DEMON_NAME_CACHE_CAVE
+
+
+def _install_compact_demon_name_cache(exe, w32):
+    """Keep every translated demon name inside record+0x5d..record+0x6f."""
+    CAVE = DEMON_NAME_CACHE_CONVERTER
+    CAVE_END = MN.DEMON_NAME_CACHE_CAVE_END
+    ASCII_TABLE = 0x800d8400
+    STRCPY_CALL = 0x801f37d4
+    MARKER = SS.ASCII_MARKER
+    ZERO,V0,A0,A1,T0,T1,T2,T3,T4,T5,T6,T7,RA = (
+        0,2,4,5,8,9,10,11,12,13,14,15,31)
+    RI=lambda op,rs,rt,imm:((op&0x3f)<<26)|((rs&0x1f)<<21)|((rt&0x1f)<<16)|(imm&0xffff)
+    LBU=lambda rt,o,rs:RI(0x24,rs,rt,o); SB=lambda rt,o,rs:RI(0x28,rs,rt,o)
+    ADDIU=lambda rt,rs,i:RI(0x09,rs,rt,i); SLTIU=lambda rt,rs,i:RI(0x0b,rs,rt,i)
+    LUI=lambda rt,i:RI(0x0f,ZERO,rt,i)
+    BEQ=lambda rs,rt,off:RI(0x04,rs,rt,off); BNE=lambda rs,rt,off:RI(0x05,rs,rt,off)
+    ADDU=lambda rd,rs,rt:((rs&0x1f)<<21)|((rt&0x1f)<<16)|((rd&0x1f)<<11)|0x21
+    J=lambda target:(0x02<<26)|((target>>2)&0x03ffffff)
+    JAL=lambda target:(0x03<<26)|((target>>2)&0x03ffffff)
+    JR=lambda rs:((rs&0x1f)<<21)|8
+    NOP=0
+    lo=lambda x:x&0xffff
+    hi=lambda x:((x>>16)+(1 if x&0x8000 else 0))&0xffff
+
+    allowed = set(chr(value) for value in range(0x20, 0x7f))
+    too_long = [name for name in NT.DEMONS
+                if len(name) + 2 > DEMON_NAME_CACHE_FIELD_SIZE]
+    non_ascii = [(name, sorted(set(name) - allowed)) for name in NT.DEMONS
+                 if set(name) - allowed]
+    if too_long or non_ascii:
+        raise SystemExit(
+            "Demon name does not fit the compact 19-byte record field: "
+            f"too long={too_long!r}, non-ASCII={non_ascii!r}"
+        )
+
+    # Search the printable portion of ASCII_TABLE by its two raw SJIS bytes.
+    # This is intentionally generic rather than hard-coding letter/punctuation
+    # ranges; demon creation is rare and the longest possible scan is negligible.
+    table_printable = ASCII_TABLE + 0x20 * 2
+    LOOP, SEARCH, NEXT, EMIT, DONE = 3, 12, 20, 25, 29
+    prog = [
+        ADDIU(T7,ZERO,MARKER), SB(T7,0,A0), ADDIU(A0,A0,1),
+        LBU(T0,0,A1), NOP,                         # LOOP: source high byte
+        0, ADDIU(T6,ZERO,ord("?")),               # beq NUL -> DONE; default
+        LBU(T1,1,A1), ADDIU(A1,A1,2),              # source low byte
+        LUI(T2,hi(table_printable)), ADDIU(T2,T2,lo(table_printable)),
+        ADDIU(T3,ZERO,0x20),
+        LBU(T4,0,T2), LBU(T5,1,T2),                # SEARCH
+        0, NOP,                                    # bne high -> NEXT
+        0, NOP,                                    # bne low -> NEXT
+        J(CAVE+EMIT*4), ADDU(T6,T3,ZERO),           # matched ASCII byte
+        ADDIU(T2,T2,2), ADDIU(T3,T3,1),            # NEXT
+        SLTIU(T4,T3,0x7f),
+        0, NOP,                                    # bne printable -> SEARCH
+        SB(T6,0,A0), ADDIU(A0,A0,1),               # EMIT
+        J(CAVE+LOOP*4), NOP,
+        JR(RA), SB(ZERO,0,A0),                     # DONE
+    ]
+    prog[5] = BEQ(T0,ZERO,DONE-(5+1))
+    prog[14] = BNE(T4,T0,NEXT-(14+1))
+    prog[16] = BNE(T5,T1,NEXT-(16+1))
+    prog[23] = BNE(T4,ZERO,SEARCH-(23+1))
+
+    if CAVE + len(prog)*4 > CAVE_END:
+        raise SystemExit("compact demon-name converter exceeds its cave")
+    cave = exe[foff(CAVE):foff(CAVE_END)]
+    if set(cave) - {0x00, 0x06, 0x60}:
+        raise SystemExit("compact demon-name converter cave is not free tofu")
+    for index, word in enumerate(prog):
+        w32(CAVE + index*4, word)
+
+    expected = JAL(0x800d107c)                    # BIOS strcpy thunk
+    actual = struct.unpack_from("<I", exe, foff(STRCPY_CALL))[0]
+    if actual != expected:
+        raise SystemExit(
+            f"demon-name cache hook {STRCPY_CALL:#x}: "
+            f"{actual:#010x} != {expected:#010x}"
+        )
+    w32(STRCPY_CALL, JAL(CAVE))
+
+
+def _install_compact_name_migrator(exe, w32):
+    """Convert Yamata's cached ASCII to private compact-glyph tokens in place.
+
+    Party boxes are drawn through more than one front end, including the shared
+    object compositor.  Both marker-aware printers call this routine, so an old
+    save-state cache containing ``\x1fYamata-no-Orochi`` is upgraded the first
+    time any affected UI renders it.  Only a/o/m/r are replaced; the complete
+    name remains present and its final ``hi`` is rendered inside the panel.
+    """
+    CAVE = MN.DEMON_NAME_MIGRATOR_CAVE
+    CAVE_END = MN.DEMON_NAME_MIGRATOR_CAVE_END
+    MARKER = SS.ASCII_MARKER
+    ZERO,A1,T0,T1,T2,RA = 0,5,8,9,10,31
+    RI=lambda op,rs,rt,imm:((op&0x3f)<<26)|((rs&0x1f)<<21)|((rt&0x1f)<<16)|(imm&0xffff)
+    RR=lambda rs,rt,rd,sa,fn:((rs&0x1f)<<21)|((rt&0x1f)<<16)|((rd&0x1f)<<11)|((sa&0x1f)<<6)|(fn&0x3f)
+    LBU=lambda rt,o,rs:RI(0x24,rs,rt,o)
+    SB=lambda rt,o,rs:RI(0x28,rs,rt,o)
+    ADDIU=lambda rt,rs,i:RI(0x09,rs,rt,i)
+    BEQ=lambda rs,rt,o:RI(0x04,rs,rt,o)
+    BNE=lambda rs,rt,o:RI(0x05,rs,rt,o)
+    J=lambda target:(0x02<<26)|((target>>2)&0x03ffffff)
+    JR=lambda rs:RR(rs,ZERO,ZERO,0,0x08)
+    NOP=0
+
+    prog = []
+    labels = {}
+    branches = []
+    jumps = []
+    def label(name): labels[name] = len(prog)
+    def emit(*words): prog.extend(words)
+    def branch(kind, rs, rt, target):
+        branches.append((len(prog), kind, rs, rt, target))
+        prog.append(0)
+    def jump(target):
+        jumps.append((len(prog), target))
+        prog.append(0)
+
+    # Fast, load-delay-safe test for the unique marker-prefixed "Yam" prefix.
+    emit(LBU(T0,0,A1), LBU(T1,1,A1), ADDIU(T2,ZERO,MARKER))
+    branch(BNE,T0,T2,"done")
+    emit(LBU(T0,2,A1), ADDIU(T2,ZERO,ord("Y")))
+    branch(BNE,T1,T2,"done")
+    emit(LBU(T1,3,A1), ADDIU(T2,ZERO,ord("a")))
+    branch(BNE,T0,T2,"done")
+    emit(ADDIU(T2,ZERO,ord("m")))
+    branch(BNE,T1,T2,"done")
+    emit(ADDIU(T0,A1,1))
+
+    label("loop")
+    emit(LBU(T1,0,T0), NOP)
+    branch(BEQ,T1,ZERO,"done")
+    emit(NOP)
+    for char in FIELD_NARROW_SENTINELS:
+        emit(ADDIU(T2,ZERO,ord(char)))
+        branch(BEQ,T1,T2,f"map_{char}")
+        emit(NOP)
+    label("next")
+    emit(ADDIU(T0,T0,1))
+    jump("loop")
+    emit(NOP)
+
+    for char, sentinel in FIELD_NARROW_SENTINELS.items():
+        label(f"map_{char}")
+        emit(ADDIU(T1,ZERO,sentinel))
+        jump("store")
+        emit(NOP)
+    label("store")
+    emit(SB(T1,0,T0))
+    jump("next")
+    emit(NOP)
+
+    label("done")
+    emit(JR(RA), NOP)
+
+    for index, kind, rs, rt, target in branches:
+        prog[index] = kind(rs,rt,labels[target] - (index + 1))
+    for index, target in jumps:
+        prog[index] = J(CAVE + labels[target]*4)
+
+    if CAVE + len(prog)*4 > CAVE_END:
+        raise SystemExit(
+            f"compact-name migrator exceeds cave ({len(prog)*4} bytes)"
+        )
+    cave = exe[foff(CAVE):foff(CAVE_END)]
+    if set(cave) - {0x00, 0x06, 0x60}:
+        raise SystemExit("compact-name migrator cave is not free tofu")
+    for index, word in enumerate(prog):
+        w32(CAVE + index*4, word)
+
+
+def _patch_elevator_floor_labels(exe, w32):
+    """Render elevator destinations as 22F/21F/20F instead of 22-floor."""
+    for address, expected, replacement in (
+        (0x80068c80, 0x2402008a, 0x24020082),  # SJIS 0x8a4b -> 0x8265
+        (0x80068c8c, 0x2402004b, 0x24020065),
+    ):
+        actual = struct.unpack_from("<I", exe, foff(address))[0]
+        if actual != expected:
+            raise SystemExit(
+                f"elevator floor suffix {address:#x}: "
+                f"{actual:#010x} != {expected:#010x}"
+            )
+        w32(address, replacement)
+
+
+def _patch_long_demon_name_layouts(exe, widths, widths10):
+    """Give every cached-name UI enough room for the widest English demon."""
+    def sidx(code):
+        b1, b2 = code >> 8, code & 0xff
+        row = (b1 - 0x81) if b1 < 0xa0 else (b1 - 0xc1)
+        return (b2 - 0x40) + row * 189
+
+    def text_width(text, table, fallback):
+        return sum(table.get(sidx(ET.fullwidth(char)), fallback) for char in text)
+
+    widest10 = max((text_width(name, widths10, 10), name) for name in NT.DEMONS)
+    def field_text_width(name, table, fallback):
+        variants = FIELD_NARROW_GLYPHS if name == "Yamata-no-Orochi" else {}
+        return sum(
+            table.get(
+                sidx(variants.get(char, ET.fullwidth(char))), fallback
+            )
+            for char in name
+        )
+    widest_field10 = max(
+        (field_text_width(name, widths10, 10), name) for name in NT.DEMONS
+    )
+    widest_field12 = max(
+        (field_text_width(name, widths, 12), name) for name in NT.DEMONS
+    )
+    widest12 = max((text_width(name, widths, 12), name) for name in NT.DEMONS)
+    width10, name10 = widest10
+    field_width10, field_name10 = widest_field10
+    field_width12, field_name12 = widest_field12
+    width12, name12 = widest12
+
+    def patch_word(address, expected, replacement, label):
+        actual = struct.unpack_from("<I", exe, foff(address))[0]
+        if actual != expected:
+            raise SystemExit(
+                f"{label} {address:#x}: {actual:#010x} != {expected:#010x}"
+            )
+        struct.pack_into("<I", exe, foff(address), replacement)
+
+    # Use the compact font in the shared party/name renderer.  The cached-name
+    # migrator substitutes private narrower glyph tokens for Yamata alone; all
+    # other party, status, and Cathedral text retains normal spacing.
+    if field_width10 > 80:
+        raise SystemExit(
+            f"80px party-name strip cannot fit {field_name10!r} "
+            f"({field_width10}px)"
+        )
+    patch_word(0x80039d70, 0x24050008, 0x24050004,
+               "party/name-plate font")
+
+    # The field renderer independently draws the same UI marker for records
+    # whose +0x5c flag is set.  Its literal has one caller (0x80093408); make it
+    # empty as well rather than relying solely on the blank compact glyph.
+    underprint = foff(0x80014c44)
+    if exe[underprint:underprint+3] != b"\x81\x96\x00":
+        raise SystemExit("unexpected party-name asterisk underprint")
+    exe[underprint] = 0
+
+    # Although each party cell is 96 pixels wide, its name texture exposes only
+    # an 80-pixel strip.  The previous x=4 origin left 76 usable pixels and made
+    # Yamata's final four pixels spill back onto the strip's left edge.  Use the
+    # natural left edge for every name; this also accommodates the other 80px
+    # worst case (Cailleach Bheare) without giving Yamata unique alignment.
+    if field_width10 > 80:
+        raise SystemExit(
+            f"party HUD cannot fit {field_name10!r} ({field_width10}px)"
+        )
+    patch_word(0x80093414, 0x2405000f, 0x24050000,
+               "party HUD name origin")
+
+    # The normal field party panels are produced by a second renderer using
+    # the 12x12 font and then sliced into 96px cells.  This was the path still
+    # visible in state21: unmodified Yamata advances 100px from stock x=4.
+    # Its private glyph tokens advance 93px, and x=0 leaves them fully inside
+    # the panel while preserving normal metrics for every other name.
+    if field_width12 > 96:
+        raise SystemExit(
+            f"96px field panel cannot fit {field_name12!r} ({field_width12}px)"
+        )
+    patch_word(0x80093dd8, 0x24050004, 0x24050000,
+               "field party-panel name origin")
+
+    # The demon status header owns a 120px sprite and uses the large font.
+    # Center its worst case within that surface instead of starting at x=20.
+    status_header_x = (120 - width12) // 2
+    if status_header_x < 0:
+        raise SystemExit(f"status header cannot fit {name12!r} ({width12}px)")
+    patch_word(0x800951d8, 0x24050014,
+               0x24050000 | status_header_x, "status-header name origin")
+
+    # The status-selection roster uses 10px VWF names, 8px numeric text, and
+    # one 288px surface.  Move the three data columns just far enough right to
+    # fit the longest name while preserving gaps for %4d/%3d, %3d/%3d, and
+    # the longest six-character status label (UNDEAD/PALYZE/FREEZE/POISON).
+    name_x = 4
+    hp_x, mp_x, status_x = 94, 162, 226
+    hp_header_x = hp_x + 8
+    if (name_x + width10 + 3 > hp_x or hp_x + 8*8 + 4 > mp_x
+            or mp_x + 7*8 + 8 > status_x or status_x + 6*8 > 288):
+        raise SystemExit("status-selection column geometry no longer fits")
+
+    header_sites = {
+        0x5a: (hp_header_x, (0x80042134,0x80042404,0x800426c8,0x80042c04)),
+        0x9a: (mp_x,        (0x80042154,0x80042424,0x800426e8,0x80042c24)),
+        0xda: (status_x,    (0x80042174,0x80042444,0x80042708,0x80042c44)),
+    }
+    row_sites = {
+        0x52: (hp_x,     (0x8004223c,0x80042500,0x800427d0,0x80042d0c)),
+        0x9a: (mp_x,     (0x80042284,0x80042530,0x80042814,0x80042d54)),
+        0xda: (status_x, (0x800422a0,0x80042564,0x80042830,0x80042d70)),
+    }
+    for stock_x, (new_x, sites) in (*header_sites.items(), *row_sites.items()):
+        for address in sites:
+            patch_word(address, 0x24050000 | stock_x,
+                       0x24050000 | new_x, "status-selection column")
 
 # ============================ 3. NAME TABLES ============================
 _COMPACT_RACE_POOL_START = 0x80011f9c
@@ -1051,6 +1471,49 @@ _CATHEDRAL_RACE_FONT_SITES = (
     0x8008f418,  # alternate fusion result race
     0x8008f9f0,
     0x800902c8,
+)
+# Regular demon IDs are grouped by race in the loaded fusion module.  The
+# module's lookup at 0x801fa594 returns the index of the first boundary greater
+# than the demon ID (ID 0..9 -> race 1, 10..16 -> race 2, and so on).
+_CATHEDRAL_RACE_BOUNDARIES = (
+    0, 10, 17, 22, 28, 38, 44, 50, 58, 63, 70, 76, 84, 90,
+    97, 104, 111, 117, 124, 130, 136, 145, 151, 159, 166, 173,
+    178, 183, 188, 194, 196, 204, 212, 216, 222, 229, 235, 241,
+    246, 252, 255,
+)
+# High-byte demon IDs use this race map, indexed by their low byte.  It is the
+# table at 0x801fbf58 in the loaded fusion module; entries 42/43 are sentinels
+# rather than printable races.  Low byte 0 corresponds to DEMONS[256].
+_CATHEDRAL_SPECIAL_RACES = (
+    41, 17, 36, 35, 22, 23, 41, 17, 41, 41, 23, 12, 41, 35,
+    41, 1, 1, 1, 0, 35, 5, 17, 35, 35,
+    42, 42, 42, 42, 42, 42, 42, 42, 42, 42, 42, 42,
+    36, 5, 35, 35, 0, 0, 0, 0, 0, 0, 0, 35,
+    43, 43, 43, 43, 43, 43, 43,
+)
+
+# Cathedral row fields are relative to the list's 288-pixel text surface.
+# Race and demon are appended as one proportional field; this avoids paying
+# for the independent worst case of both columns when no such race/demon pair
+# exists in the game's data.
+_CATHEDRAL_PAIR_GAP = 4
+_CATHEDRAL_SOURCE_X = 13
+_CATHEDRAL_FIRST_NAME_X = 66
+_CATHEDRAL_FIRST_LEVEL_X = 166
+_CATHEDRAL_RESULT_X = 144
+_CATHEDRAL_RESULT_LEVEL_X = 268
+
+# Four instructions which used to reset x to the stock NAME column.  Each is
+# replaced by ``cursor_x += 4`` after the race has been printed, so the demon
+# name follows it naturally.  Values are (address, context register).
+_CATHEDRAL_JOIN_NAME_SITES = (
+    (0x8008de44, 19),  # s3: compact selected-demon summary
+    (0x8008e988, 16),  # s0: next-demon source
+    (0x8008eadc, 17),  # s1: next-demon result
+    (0x8008f350, 16),  # s0: alternate next-demon source
+    (0x8008f464, 16),  # s0: alternate next-demon result
+    (0x8008fa1c, 16),  # s0: special-fusion source roster
+    (0x800902f4, 17),  # s1: equipment-fusion source roster
 )
 SPELL_DESCRIPTION_START = 160
 SPELL_DESCRIPTION_MAX_PIXELS = 124
@@ -1163,6 +1626,162 @@ def _patch_cathedral_race_font(exe):
         struct.pack_into("<I", exe, offset, compact_font_10)
 
 
+def _patch_cathedral_columns(exe, widths10):
+    """Fit every regular race/demon name on the Cathedral fusion screens.
+
+    Stock reserves separate fixed columns for Japanese race and demon names.
+    English ``Demonoid`` overruns the first column, while several demon names
+    overrun the second.  The roomy first-demon screen keeps aligned columns:
+    RACE is x=13..61 and NAME is x=66..157.  The crowded next-demon screen
+    appends the two proportional strings with a 4-pixel gap, making the useful
+    unit the *real* race/name pair.  Across all 255 normal demons the widest
+    pair is 120 pixels, which fits both the source field (x=13 through the
+    compatibility mark at x=134) and result field (x=144 through the level at
+    x=268) without abbreviating a demon name.
+
+    The first-demon screen has no result field, so its NAME column moves 15
+    pixels right and its LV/numbered-affinity columns move 41 pixels right.  The
+    next-demon RESULT header/result rows move
+    four pixels left, leaving a visible gap before LV even for the widest pair.
+    """
+    from bisect import bisect_right
+
+    def sidx(code):
+        b1, b2 = code >> 8, code & 0xff
+        row = (b1 - 0x81) if b1 < 0xa0 else (b1 - 0xc1)
+        return (b2 - 0x40) + row * 189
+
+    def text_width(text):
+        return sum(widths10.get(sidx(ET.fullwidth(char)), 10) for char in text)
+
+    if len(NT.DEMONS) < 255 or len(NT.RACES) != 42:
+        raise RuntimeError("Cathedral width audit requires 255 demons and 42 races")
+
+    pairs = []
+    for demon_id, demon in enumerate(NT.DEMONS[:255]):
+        race_id = bisect_right(_CATHEDRAL_RACE_BOUNDARIES, demon_id)
+        race = NT.RACES[race_id]
+        width = text_width(race) + _CATHEDRAL_PAIR_GAP + text_width(demon)
+        pairs.append((width, demon_id, race, demon))
+    for low_id, race_id in enumerate(_CATHEDRAL_SPECIAL_RACES):
+        demon_index = 256 + low_id
+        if demon_index >= len(NT.DEMONS) or race_id >= len(NT.RACES):
+            continue
+        demon = NT.DEMONS[demon_index]
+        race = NT.RACES[race_id]
+        width = text_width(race) + _CATHEDRAL_PAIR_GAP + text_width(demon)
+        pairs.append((width, 0x100 + low_id, race, demon))
+
+    widest, demon_id, race, demon = max(pairs)
+    widest_race = max(map(text_width, NT.RACES))
+    widest_demon = max(map(text_width, NT.DEMONS))
+    first_race_capacity = _CATHEDRAL_FIRST_NAME_X - \
+                          _CATHEDRAL_PAIR_GAP - _CATHEDRAL_SOURCE_X
+    first_name_capacity = _CATHEDRAL_FIRST_LEVEL_X - 8 - \
+                          _CATHEDRAL_FIRST_NAME_X
+    if widest_race > first_race_capacity or widest_demon > first_name_capacity:
+        raise SystemExit(
+            "Cathedral first-demon columns do not fit: "
+            f"race {widest_race}/{first_race_capacity}px, "
+            f"name {widest_demon}/{first_name_capacity}px"
+        )
+
+    source_capacity = 134 - _CATHEDRAL_SOURCE_X
+    # Preserve four clear pixels between the result text and its level.
+    result_capacity = _CATHEDRAL_RESULT_LEVEL_X - 4 - _CATHEDRAL_RESULT_X
+    if widest > min(source_capacity, result_capacity):
+        raise SystemExit(
+            "Cathedral race/name pair does not fit: "
+            f"ID {demon_id} {race} {demon!r} is {widest}px; "
+            f"capacities are {source_capacity}px/{result_capacity}px"
+        )
+
+    def patch_word(address, expected, replacement, label):
+        offset = foff(address)
+        actual = struct.unpack_from("<I", exe, offset)[0]
+        if actual != expected:
+            raise RuntimeError(
+                f"Unexpected {label} instruction at 0x{address:08x}: "
+                f"0x{actual:08x} != 0x{expected:08x}"
+            )
+        struct.pack_into("<I", exe, offset, replacement)
+
+    def i_type(op, rs, rt, immediate):
+        return ((op & 0x3f) << 26) | ((rs & 0x1f) << 21) | \
+               ((rt & 0x1f) << 16) | (immediate & 0xffff)
+
+    # Validate the whole stock four-instruction reset before replacing it.
+    stock_name_x = {
+        0x8008de44: 0x40,
+        0x8008e988: 0x33, 0x8008eadc: 0xba, 0x8008f350: 0x33,
+        0x8008f464: 0xba, 0x8008fa1c: 0x33, 0x800902f4: 0x33,
+    }
+    jal_set_xy = 0x0c012112  # jal 0x80048448
+    for address, context_reg in _CATHEDRAL_JOIN_NAME_SITES:
+        offset = foff(address)
+        stock = struct.unpack_from("<4I", exe, offset)
+        expected_move_a0 = (context_reg << 21) | (4 << 11) | 0x21
+        if (stock[0] != expected_move_a0
+                or stock[1] != i_type(0x09, 0, 5, stock_name_x[address])
+                or stock[2] != jal_set_xy):
+            raise RuntimeError(
+                f"Unexpected Cathedral NAME reset at 0x{address:08x}: "
+                + ", ".join(f"0x{word:08x}" for word in stock)
+            )
+        replacement = (
+            i_type(0x25, context_reg, 5, 0x20),  # lhu a1,0x20(context)
+            0,  # R3000 load-delay slot: addiu must not consume a1 yet
+            i_type(0x09, 5, 5, _CATHEDRAL_PAIR_GAP),
+            i_type(0x29, context_reg, 5, 0x20),  # sh a1,0x20(context)
+        )
+        struct.pack_into("<4I", exe, offset, *replacement)
+
+    # Main first-demon header/row variants retain true aligned columns.
+    for address in (0x8008d02c, 0x8008d290, 0x8008d378):
+        patch_word(address, 0x24050033, 0x24050042,
+                   "Cathedral NAME header")
+    for address in (0x8008e618, 0x8008ed3c, 0x8008efac):
+        patch_word(address, 0x24050033, 0x24050042,
+                   "Cathedral NAME field")
+    for address in (0x8008d04c, 0x8008d2b0, 0x8008d398):
+        patch_word(address, 0x24050085, 0x240500ae, "Cathedral LV header")
+    for address in (0x8008d068, 0x8008d3b4):
+        patch_word(address, 0x24140098, 0x241400c1,
+                   "Cathedral affinity-header origin")
+    # Special/equipment variants use joined race/name fields rather than the
+    # independently aligned first-demon columns, so 18 pixels is sufficient.
+    for address in (0x8008d61c, 0x8008d910, 0x8008db50):
+        patch_word(address, 0x24140098, 0x241400aa,
+                   "Cathedral special affinity-header origin")
+
+    # Main first-demon row variants: level and affinity values +41 px.
+    for address in (0x8008e640, 0x8008ed64, 0x8008efd4):
+        patch_word(address, 0x2405007d, 0x240500a6,
+                   "Cathedral level field")
+    patch_word(0x8008e5d8, 0x24170099, 0x241700c2,
+               "Cathedral affinity-row origin")
+    patch_word(0x8008ef68, 0x24150099, 0x241500c2,
+               "Cathedral alternate affinity-row origin")
+
+    # The special-fusion roster uses the same source pair but a different set
+    # of fields.  Move only the three fields which begin before x=184; the
+    # rightmost count fields at x=261/272 already have their own safe region.
+    for address, expected, replacement in (
+        (0x8008fa48, 0x24050074, 0x24050086),
+        (0x8008fa78, 0x24050080, 0x24050092),
+        (0x8008fb64, 0x240500a6, 0x240500b8),
+    ):
+        patch_word(address, expected, replacement,
+                   "Cathedral special-fusion field")
+
+    # Main next-demon header/result variants: RESULT starts at x=144.  The
+    # equipment-fusion x=148 field is intentionally separate and unchanged.
+    for address in (0x8008d1c4, 0x8008d510, 0x8008da6c, 0x8008dca8,
+                    0x8008ea74, 0x8008f404):
+        patch_word(address, 0x24050094, 0x24050090,
+                   "Cathedral RESULT field")
+
+
 def _patch_confirm_font(exe):
     """Keep the greyed YES/NO confirm options in the stock heavy style.
 
@@ -1186,7 +1805,7 @@ def _patch_confirm_font(exe):
         exe[off:off + len(relocated)] = relocated
 
 
-def apply_name_tables(exe, slpm, PATHS):
+def apply_name_tables(exe, slpm, PATHS, widths10):
     # single-level [N u16 offsets][data]: (base, list, alloc_end)
     NT.rebuild_single(exe, 0x80102962, NT.DEMONS,    0x801034da, PATHS)  # demons  (311)
     NT.rebuild_single(exe, 0x801043f8, NT.RACES,     0x8010452c, PATHS)  # races   (42)
@@ -1204,6 +1823,7 @@ def apply_name_tables(exe, slpm, PATHS):
     NT.rebuild_split(exe, 0x801034da, 0x801036da, traits, 0x801043f8, PATHS)
     _patch_compact_race_labels(exe)
     _patch_cathedral_race_font(exe)
+    _patch_cathedral_columns(exe, widths10)
     _patch_confirm_font(exe)
     _patch_bar_drink_menu(exe)
     _patch_casino_prize_menu(exe)
@@ -2084,7 +2704,7 @@ def main(argv=None):
         f"{ab_base_leaves} measured base leaves)"
     )
     print("[5/7] applying name tables")
-    apply_name_tables(exe, slpm, PATHS)
+    apply_name_tables(exe, slpm, PATHS, widths10)
     cmdinit = bytearray(cmdinit0)
     apply_cmdinit_names(cmdinit)             # REAL new-game party names (CMDINIT.BIN)
     MN.relocate_map_names(exe)               # field/location names (save list) -> English, relocated

@@ -64,6 +64,7 @@ FULLWIDTH_SYSTEM_TEXT = {
     0x3f98,  # shop comparison: Speed
     0x3fa0,  # shop comparison: Luck
     0x3df0,  # Church exit label (copied as a fixed nine-byte object string)
+    0x4138,  # Elevator basement prefix (prepended to a generated floor label)
     0x3fd8,  # casino prize-cost suffix (appended to a fullwidth row)
     0x4b68,  # battle status-view action prompt (fixed 15-byte copy)
     0x4b78,  # per-combatant action suffix (appended after a fullwidth name)
@@ -231,6 +232,12 @@ SYS = {
     0x3038: (16, "Res Ice"),               # 対氷結
     0x3048: (16, "Res Fire"),              # 対火炎
     0x3058: (16, "Normal"),                # ノーマル
+
+    # ===================== ELEVATOR =====================
+    # Raw executable duplicate of compressed message 0x0025.  The elevator
+    # calls this literal directly, so translating bank 0 did not affect it.
+    0x4118: (32, "Voice: Select a floor."),
+    0x4138: (8, "B"),                    # basement + generated number/F -> B1F
 
     # ===================== STAT / SHOP / CASINO =====================
     0x1d5c: (16, "Points"),               # 残りポイント (level-up points left)
