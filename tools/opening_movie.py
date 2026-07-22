@@ -538,8 +538,12 @@ def generate_movies(
     input_bin = Path(input_bin)
     output_directory = Path(output_directory)
     output_directory.mkdir(parents=True, exist_ok=True)
-    # Stage on the output drive: each final Path.replace is a rename, and
-    # Windows cannot rename across drives (the default temp dir may be on C:).
+    # Stage on the output drive so the large intermediates never cross volumes.
+    # Do not rename the encoded files into the output directory: on Windows a
+    # rename preserves the temporary directory's ACL, which can make the final
+    # files unreadable by a later sandboxed build process.  Copying the bytes
+    # into a destination created directly under output_directory makes the
+    # final files inherit that directory's ACL.
     with tempfile.TemporaryDirectory(
         prefix="smt2-movies-", dir=output_directory
     ) as temporary:
@@ -581,7 +585,7 @@ def generate_movies(
         outputs = {}
         for spec in MOVIES:
             output = output_directory / spec.output_name
-            encoded[spec.filename].replace(output)
+            shutil.copyfile(encoded[spec.filename], output)
             outputs[spec.filename] = output
     return outputs
 

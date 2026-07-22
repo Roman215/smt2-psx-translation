@@ -289,6 +289,17 @@ def kern_font(slpm):
     for c in KERN_PUNCT: widths[sidx(c)] = kern(sidx(c))
     widths[0] = 4  # space
 
+    # The stock right-apostrophe glyph occupies rows 0-2 while Latin capitals
+    # begin on row 1.  With the dialogue renderer's tight line advance, its top
+    # row can share a scanline with a p/y descender from the line above.  Lower
+    # only this glyph by one pixel; its horizontal ink and VWF advance stay the
+    # same, and row 11 is empty so no pixels are clipped.
+    apostrophe = sidx(0x8166)
+    apostrophe_rows = get_glyph(apostrophe)
+    if any(apostrophe_rows[-1]):
+        raise SystemExit("cannot lower 12px apostrophe without clipping")
+    set_glyph(apostrophe, [[0] * W] + apostrophe_rows[:-1])
+
     # Some party panels use a separate 12x12 name renderer.  Populate the same
     # private SJIS cells in this atlas so the cached-name tokens work through
     # either printer.
@@ -1358,14 +1369,8 @@ def _patch_long_demon_name_layouts(exe, widths, widths10):
     widest_field10 = max(
         (field_text_width(name, widths10, 10), name) for name in NT.DEMONS
     )
-    widest_field12 = max(
-        (field_text_width(name, widths, 12), name) for name in NT.DEMONS
-    )
-    widest12 = max((text_width(name, widths, 12), name) for name in NT.DEMONS)
     width10, name10 = widest10
     field_width10, field_name10 = widest_field10
-    field_width12, field_name12 = widest_field12
-    width12, name12 = widest12
 
     def patch_word(address, expected, replacement, label):
         actual = struct.unpack_from("<I", exe, foff(address))[0]
@@ -1406,25 +1411,21 @@ def _patch_long_demon_name_layouts(exe, widths, widths10):
     patch_word(0x80093414, 0x2405000f, 0x24050000,
                "party HUD name origin")
 
-    # The normal field party panels are produced by a second renderer using
-    # the 12x12 font and then sliced into 96px cells.  This was the path still
-    # visible in state21: unmodified Yamata advances 100px from stock x=4.
-    # Its private glyph tokens advance 93px, and x=0 leaves them fully inside
-    # the panel while preserving normal metrics for every other name.
-    if field_width12 > 96:
-        raise SystemExit(
-            f"96px field panel cannot fit {field_name12!r} ({field_width12}px)"
-        )
-    patch_word(0x80093dd8, 0x24050004, 0x24050000,
-               "field party-panel name origin")
+    # 0x80093db0 composes church healing-result sentences such as
+    # "<name> fully healed!" on a 288px surface.  It is not a field-party or
+    # shop-header renderer, so retain its stock four-pixel sentence inset.
+    patch_word(0x80093dd8, 0x24050004, 0x24050004,
+               "healing-result sentence origin")
 
-    # The demon status header owns a 120px sprite and uses the large font.
-    # Center its worst case within that surface instead of starting at x=20.
-    status_header_x = (120 - width12) // 2
-    if status_header_x < 0:
-        raise SystemExit(f"status header cannot fit {name12!r} ({width12}px)")
-    patch_word(0x800951d8, 0x24050014,
-               0x24050000 | status_header_x, "status-header name origin")
+    # 0x80095164 draws the selected human's name in equipment-shop headers.
+    # Its 120px text surface is displayed at screen x=92, while a separate
+    # 16px status icon occupies x=95..110.  Keep the stock local x=20 inset so
+    # the first name pixel appears at screen x=112.  The previous demon-name
+    # centering patch used x=10 and put that pixel at x=102, under the icon.
+    # Demons cannot equip items, and eight-character human names still fit in
+    # the remaining 100 pixels with the stock 12x12 VWF.
+    patch_word(0x800951d8, 0x24050014, 0x24050014,
+               "equipment-shop name origin")
 
     # The status-selection roster uses 10px VWF names, 8px numeric text, and
     # one 288px surface.  Move the three data columns just far enough right to

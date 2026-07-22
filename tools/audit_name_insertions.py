@@ -6,9 +6,11 @@ demon, race, and skill names at runtime.  Those controls are separate tokens in
 the adjacent English fragments.  Timing controls such as WT and A68 make the
 boundary easy to miss during an ordinary text review.
 
-This audit checks every name-like insertion, the speaker-colon evidence in the
-raw Japanese dump, standalone speaker-prefix records, and literal ``Name:text``
-patterns.  It writes a compact Markdown summary and a TSV suitable for sorting.
+This audit checks every name-like insertion, adjacent runtime-name inserts,
+text that can continue across neighboring message records, the speaker-colon
+evidence in the raw Japanese dump, standalone speaker-prefix records, and
+literal ``Name:text`` patterns.  It writes a compact Markdown summary and a TSV
+suitable for sorting.
 
 Usage:
     python tools/audit_name_insertions.py
@@ -59,6 +61,13 @@ NAME_INSERT_SET = set(NAME_INSERTS)
 # audit deliberately looks through them.  CR/PG and the A/B layout controls
 # are barriers because a new line/page is itself a separator.
 TRANSPARENT_CONTROLS = {"WT", "TI", "TW", "A68"}
+
+# These controls can occur after the final visible Japanese character without
+# supplying a separator.  Do not strip runtime inserts here: a space before a
+# final [SY]/[MG]/etc. belongs to that inserted name, not to the next record.
+SOURCE_TRAILING_CONTROLS = {"ED", "WT", "TI", "TW"}
+VISUAL_SEPARATORS = {"CR", "PG"}
+SOURCE_CONTROL_AT_END_RE = re.compile(r"\[([A-Za-z0-9]+)\]$")
 
 
 @dataclass
@@ -255,6 +264,89 @@ def literal_colon_issues() -> list[str]:
     return issues
 
 
+def adjacent_insert_issues() -> list[str]:
+    """Find two runtime names rendered without any authored separator."""
+    issues: list[str] = []
+    for message_id, tokens in sorted(TRANS.items()):
+        for index, token in enumerate(tokens):
+            if token not in NAME_INSERT_SET:
+                continue
+            next_index = index + 1
+            while (next_index < len(tokens)
+                   and tokens[next_index] in TRANSPARENT_CONTROLS):
+                next_index += 1
+            if (next_index < len(tokens)
+                    and tokens[next_index] in NAME_INSERT_SET):
+                issues.append(
+                    f"0x{message_id:04X} fragments {index}/{next_index}: "
+                    f"adjacent {token}/{tokens[next_index]} inserts lack a separator"
+                )
+    return issues
+
+
+def source_has_trailing_separator(text: str) -> bool:
+    """Whether Japanese preserves a visible space before its final controls."""
+    while True:
+        match = SOURCE_CONTROL_AT_END_RE.search(text)
+        if not match or match.group(1) not in SOURCE_TRAILING_CONTROLS:
+            break
+        text = text[:match.start()]
+    return text.endswith((" ", "\u3000"))
+
+
+def record_edge(tokens: list[object], reverse: bool) -> tuple[str, bool]:
+    """Return a record's edge text and whether a line/page separates it."""
+    sequence = reversed(tokens) if reverse else iter(tokens)
+    for token in sequence:
+        if token == "ED" or token in TRANSPARENT_CONTROLS:
+            continue
+        if token in VISUAL_SEPARATORS:
+            return "", True
+        if token in NAME_INSERT_SET:
+            return f"<{token}>", False
+        if not isinstance(token, str) or token in ALL_CONTROLS:
+            return "", False
+        return token, False
+    return "", False
+
+
+def neighboring_record_issues(raw: dict[int, str]) -> list[str]:
+    """Audit likely joins between consecutive C/D dialogue records.
+
+    The event engine can append separately stored records without moving the
+    text cursor.  Japanese marks many such joins with a final fullwidth space.
+    A second conservative check catches an English clause ending in a letter
+    followed by a lowercase continuation, even when Japanese joins the clause
+    with a particle and therefore has no source-space evidence.
+
+    A/B negotiation fragments are excluded: their source records are padded
+    uniformly and their reachable composition is audited by audit_negotiation.
+    """
+    issues: list[str] = []
+    for message_id, tokens in sorted(TRANS.items()):
+        if message_id >= 0x4000 or message_id + 1 not in TRANS:
+            continue
+        left, left_barrier = record_edge(tokens, reverse=True)
+        right, right_barrier = record_edge(TRANS[message_id + 1], reverse=False)
+        if left_barrier or right_barrier or not left or not right:
+            continue
+        if left[-1].isspace() or right[0].isspace():
+            continue
+        source_separator = source_has_trailing_separator(raw.get(message_id, ""))
+        lexical_continuation = left[-1].isalnum() and right[0].islower()
+        if source_separator or lexical_continuation:
+            evidence = (
+                "Japanese trailing separator"
+                if source_separator else "lowercase lexical continuation"
+            )
+            issues.append(
+                f"0x{message_id:04X}->0x{message_id + 1:04X}: "
+                f"records join without whitespace ({evidence}); "
+                f"left={left!r}, right={right!r}"
+            )
+    return issues
+
+
 def write_tsv(path: Path, rows: list[BoundaryRow]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8", newline="") as output:
@@ -301,13 +393,15 @@ def write_markdown(
     if issues:
         lines.extend(f"- {issue}" for issue in issues)
     else:
-        lines.append("No unresolved name-boundary or speaker-colon issues were found.")
+        lines.append("No unresolved spacing or speaker-colon issues were found.")
     lines.extend(
         [
             "",
             "The boundary check looks through `WT`, `TI`, `TW`, and `A68` because",
             "those controls delay text without supplying punctuation or whitespace.",
             "Line/page controls are treated as visual separators.",
+            "The neighboring-record check also preserves separators evidenced by",
+            "the raw Japanese and catches lowercase English clause continuations.",
             "",
         ]
     )
@@ -339,6 +433,8 @@ def main() -> int:
     dynamic_colon_count, colon_issues = dynamic_colon_issues(raw)
     issues = (
         boundary_issues
+        + adjacent_insert_issues()
+        + neighboring_record_issues(raw)
         + colon_issues
         + header_issues
         + ab_colon_issues

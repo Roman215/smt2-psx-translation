@@ -36,19 +36,23 @@ AB_MENU_END_TOKEN=(0x8140,True,0x0f)
 # descriptors.  Stock presents it as a small floating box, which both clips
 # long English responses and leaves an awkward amount of the underlying full
 # dialogue box visible.  Restyle it as a fixed lower response panel aligned to
-# that dialogue box's inner rectangle (x=16..304, bottom=224).  This mirrors the
+# that dialogue box's inner rectangle.  This mirrors the
 # battle UI's illusion of a short prompt panel sitting above a covering overlay;
 # menus with fewer than four choices simply leave unused space in the response
 # panel instead of changing its outer height.
 #
 # Some reachable prompts occupy two dialogue rows, so the panel begins one 13px
 # row below stock.  Move its frame, text surface, glyphs, and highlight together.
+# The window renderer draws its left/top bevel inward but extends its right/bottom
+# bevel four pixels beyond the supplied endpoint.  End the fill at x=300/y=220
+# so the complete visible bevel lands at x=304/y=224 instead of disappearing
+# beneath the full-screen frame.  Keep the response rows four pixels inside it.
 AB_MENU_WINDOW_LEFT=16
-AB_MENU_WINDOW_RIGHT=304
+AB_MENU_WINDOW_RIGHT=300
 AB_MENU_WINDOW_TOP=166
-AB_MENU_WINDOW_BOTTOM=224
+AB_MENU_WINDOW_BOTTOM=220
 AB_MENU_TEXT_X=20
-AB_MENU_TEXT_WIDTH=280
+AB_MENU_TEXT_WIDTH=276
 AB_MENU_TEXT_Y0=168
 AB_MENU_STOCK_WINDOW_LEFT=96
 AB_MENU_STOCK_WINDOW_RIGHT=224
@@ -59,11 +63,15 @@ AB_MENU_STOCK_TEXT_Y0=155
 # The labels are rendered into a separate 128x52 object surface whose stock
 # screen origin is (96,153).  Each row begins with a raw ``mu 4,y`` position
 # command, so the visible glyph origin is surface_x+4.  Move and enlarge the
-# surface along with the window, but do not exceed 256px: PSX texture U
-# coordinates are 8-bit, and a 288px surface repeats its first 32px at the far
-# right.  The widest English label is well below the remaining 252px glyph area.
+# surface along with the window, but stop at the texture-page boundary.  Its
+# source begins at U=24 and PSX texture U coordinates are 8-bit, leaving 232px
+# before they wrap to U=0.  A 256px sprite sampled those preceding 24px again
+# at screen x=248..271; stale text there could expose the start of a player
+# name (such as "Th" from "Theodore") at the panel's lower right.  The widest
+# English label is well below the remaining 228px glyph area.
 AB_MENU_SURFACE_X=AB_MENU_WINDOW_LEFT
-AB_MENU_SURFACE_WIDTH=256
+AB_MENU_TEXTURE_U=24
+AB_MENU_SURFACE_WIDTH=256-AB_MENU_TEXTURE_U
 AB_MENU_SURFACE_Y=AB_MENU_WINDOW_TOP
 AB_MENU_STOCK_SURFACE_X=AB_MENU_STOCK_WINDOW_LEFT
 AB_MENU_STOCK_SURFACE_WIDTH=AB_MENU_STOCK_WINDOW_RIGHT-AB_MENU_STOCK_WINDOW_LEFT
@@ -78,6 +86,7 @@ AB_MENU_TEXT_ROWS=tuple(0x800f7bbc+8*row for row in range(4))
 AB_MENU_SURFACE_X_FIELDS=(0x800ef03a,0x800ef048,0x800ef05c)
 AB_MENU_SURFACE_Y_FIELDS=(0x800ef03c,0x800ef04a,0x800ef05e)
 AB_MENU_SURFACE_WIDTH_FIELDS=(0x800eefe4,0x800ef050,0x800ef064,0x800ef090)
+AB_MENU_TEXTURE_U_FIELDS=(0x800ef04c,0x800ef060)
 VWF_WIDTH_TABLE=0x800d7300
 
 # index -> English (Atlus-style). "" = keep empty. Keep under data budget.
@@ -223,6 +232,15 @@ def verify_ab_menu_layout(exe):
                 f"A/B text surface width {address:#x}: "
                 f"{got} != {AB_MENU_SURFACE_WIDTH}"
             )
+    for address in AB_MENU_TEXTURE_U_FIELDS:
+        got=exe[_foff(address)]
+        if got!=AB_MENU_TEXTURE_U:
+            raise SystemExit(
+                f"A/B text surface texture U {address:#x}: "
+                f"{got} != {AB_MENU_TEXTURE_U}"
+            )
+    if AB_MENU_TEXTURE_U+AB_MENU_SURFACE_WIDTH>256:
+        raise SystemExit("A/B text surface wraps across its texture-page boundary")
     widest,index,text=widest_ab_menu_entry(exe)
     available=min(AB_MENU_TEXT_WIDTH,AB_MENU_SURFACE_WIDTH-4)
     if widest>available:
@@ -287,6 +305,15 @@ def patch_ab_menu_layout(exe):
                 f"{got} != {AB_MENU_STOCK_SURFACE_WIDTH}"
             )
         w16(address,AB_MENU_SURFACE_WIDTH)
+    for address in AB_MENU_TEXTURE_U_FIELDS:
+        got=exe[_foff(address)]
+        if got!=AB_MENU_TEXTURE_U:
+            raise SystemExit(
+                f"A/B stock text surface texture U {address:#x}: "
+                f"{got} != {AB_MENU_TEXTURE_U}"
+            )
+    if AB_MENU_TEXTURE_U+AB_MENU_SURFACE_WIDTH>256:
+        raise SystemExit("A/B text surface wraps across its texture-page boundary")
     verify_ab_menu_layout(exe)
 
 def _ab_menu_tokens(text):

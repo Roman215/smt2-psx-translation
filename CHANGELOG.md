@@ -13,6 +13,31 @@ your own verified source image.
 
 ## [Unreleased]
 
+### Changed
+
+- Clarified Cathedral fusion warnings that compare the resulting demon's
+  alignment with the player's alignment.
+- Expanded the translation-spacing audit to cover adjacent runtime names and
+  dialogue that continues across separately stored message records.
+
+### Fixed
+
+- Restored the equipment-shop header's original name inset so the status icon
+  no longer overwrites the first letter of the selected human's name.
+- Made generated movie files inherit the build directory's permissions on
+  Windows, allowing subsequent builds to read and replace them reliably.
+- Prevented the widened demon-negotiation response texture from wrapping at
+  the PSX texture-page boundary and showing stale player-name fragments.
+- Inset the negotiation response panel's right and bottom endpoints so their
+  complete beveled edges remain visible against the full-screen frame.
+- Kept both the COMP demon-dismissal confirmation and the returning "Who
+  leaves?" prompt at their original one-line height after choosing NO.
+- Lowered the dialogue apostrophe by one pixel so it no longer collides with
+  descenders on the preceding line.
+- Restored missing spaces at every cross-record dialogue join identified by
+  the expanded audit, including repeated words and dynamic race/demon names.
+- Corrected the casual thank-you shown when leaving the Valhalla bar.
+
 ## [0.1.5] - 2026-07-22
 
 This release substantially improves demon negotiation and makes long English

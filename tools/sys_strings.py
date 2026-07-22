@@ -438,7 +438,7 @@ ASCII_FIT_ENGLISH = {
     0x1c60: "Cannot remove: cursed",
     0x1c78: "Inventory full; cannot remove.",
     0x1c98: "Nothing available to equip.",
-    0x23f4: "Change formation",
+    0x23f4: "Change formation.",
     0x2a08: "Keep your heading at map top.",
     0x2a28: "Keep north at map top.",
     0x2a9c: "Repeat the last action.",
@@ -493,7 +493,8 @@ AUDITED_SYSTEM_TEXT = {
     0x2f98: "Drain Elec",
     0x2fa8: "Drain Fire",
     0x3068: "Sorry... Your level is too low.",
-    0x3094: "Their alignments differ. Fuse them anyway?",
+    # Fusion result versus player; the stock text warns it cannot be summoned.
+    0x3094: "Its alignment differs from yours. Fuse anyway?",
     0x30d4: "Your item bag is full.",
     0x30f0: "That demon is with you.",
     0x310c: "Sorry. The fusion failed.",
@@ -821,6 +822,14 @@ def apply_sys(exe):
 # よろしいですか？ slot, rebuilt as the ζ marker plus the fullwidth verb; the old
 # 12-byte suffix slot keeps only the closing "？"; and the δ line break plus the
 # second-line append are removed.  Result: "Dismiss <name>?" / "Discard <item>?"
+#
+# The stock dismiss-only 0x8762 marker is also no longer needed: the routine
+# appends the roster name itself at 0x80030664.  Its display handler changes the
+# active window's bottom coordinate by five pixels, and the confirmation-exit
+# path appends the same marker again before returning to "Who leaves?".  Drop both
+# copies and restore the live rectangle's bottom from the configured one-line
+# rectangle on every invocation, including when loading a save state whose RAM
+# was already expanded.
 _RAM_BASE = 0x8000f800  # exe file offset 0 loads at this address
 _APPEND_JAL = 0x0C00AB40  # jal 0x8002ad00
 _NOP = 0x00000000
@@ -842,10 +851,17 @@ _COMPOSED_SLOTS = (
 
 # (instruction address, expected stock word, replacement word)
 _COMPOSED_CODE = (
-    # demon dismissal: first append ζ 0x17b4 -> combo slot 0x17cc; drop δ + line 2
+    # demon dismissal: first append ζ 0x17b4 -> combo slot 0x17cc; drop the
+    # geometry-changing marker, δ, and line 2; reset the one-line frame.
     (0x8003061c, 0x24840FB4, 0x24840FCC),  # addiu a0, a0, 0xfb4 -> 0xfcc
-    (0x8003067C, _APPEND_JAL, _NOP),       # append δ
-    (0x80030688, _APPEND_JAL, _NOP),       # append よろしいですか？
+    (0x8003063C, _APPEND_JAL, _NOP),       # append 0x8762 name marker
+    (0x80030678, 0x3C048001, 0x3C02800F),  # lui v0, 0x800f
+    (0x8003067C, _APPEND_JAL, 0x2442EB7C),  # addiu v0, v0, -0x1484
+    (0x80030680, 0x24840FC8, 0x94430006),  # lhu v1, 6(v0): configured bottom
+    (0x80030684, 0x3C048001, _NOP),        # R3000 load-delay slot
+    (0x80030688, _APPEND_JAL, 0xA4430016),  # sh v1, 0x16(v0): live bottom
+    (0x8003068C, 0x24840FCC, _NOP),        # old second-line pointer delay slot
+    (0x800307D8, _APPEND_JAL, _NOP),       # exit-time 0x8762 marker
     # item discard: first append ζ 0x1b88 -> combo slot 0x1b9c; drop δ + line 2
     (0x800331C4, 0x24841388, 0x2484139C),  # addiu a0, a0, 0x1388 -> 0x139c
     (0x80033200, _APPEND_JAL, _NOP),       # append δ
