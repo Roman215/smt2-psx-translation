@@ -4,6 +4,9 @@
 Run from the project root:  python build.py
 Default output:  build/SMT2_EN.bin
 
+Gameplay enhancements, currently the Cathedral Demon Compendium, are enabled
+by default. Pass --no-enhancements to preserve the original game mechanics.
+
 Pipeline: mine dictionary -> kern font -> build exe (VWF hook + width table +
 dictionary-compressed English C/D tree) -> rebuild English A/B tree ->
 translate ALL name tables (demons/races/spells/items/locations/NPCs/traits/drinks) ->
@@ -66,8 +69,6 @@ EXPECTED_BIN_SIZE = 222_694_416
 DEFAULT_OUTPUT_DIR = "build"
 OUTPUT_BIN_NAME = "SMT2_EN.bin"
 OUTPUT_XDELTA_NAME = "SMT2_EN.xdelta"
-COMPENDIUM_BIN_NAME = "SMT2_EN_COMPENDIUM.bin"
-COMPENDIUM_XDELTA_NAME = "SMT2_EN_COMPENDIUM.xdelta"
 
 # ============================ DICTIONARY MINING ============================
 # The compression dictionary is derived deterministically from the authored
@@ -2614,11 +2615,11 @@ def _validate_cave_layouts():
         common.append((f"A/B menu strings {index}", start, end))
 
     layouts = {
-        "standard": common + [
+        "no-enhancements": common + [
             (f"map-name strings {index}", start, end)
             for index, (start, end) in enumerate(MN.CAVES, 1)
         ],
-        "compendium": common + [
+        "enhanced": common + [
             (f"map-name strings {index}", start, end)
             for index, (start, end) in enumerate(MN.COMPENDIUM_CAVES, 1)
         ] + [
@@ -2700,30 +2701,27 @@ def main(argv=None):
         help="also create the selected variant's xdelta (requires pyxdelta)",
     )
     parser.add_argument(
-        "--compendium",
+        "--no-enhancements",
         action="store_true",
-        help="build the optional Demon Compendium gameplay-enhancement variant",
+        help="disable modern gameplay enhancements, including the Demon Compendium",
     )
     args = parser.parse_args(argv)
     _validate_cave_layouts()
-    compendium_translation_restore = None
-    if args.compendium:
+    enhancements = not args.no_enhancements
+    enhancement_translation_restore = None
+    if enhancements:
         # This happens before dictionary mining and bank construction so the
-        # optional variant's neutral summoning-rejection text is encoded like
-        # every other authored message. The standard build is byte-for-byte
+        # enhanced build's neutral summoning-rejection text is encoded like
+        # every other authored message. The no-enhancements build is
         # unaffected.
-        compendium_translation_restore = COMP.prepare_translations(TR.TRANS)
+        enhancement_translation_restore = COMP.prepare_translations(TR.TRANS)
     pyxdelta = require_pyxdelta() if args.xdelta else None
     output_dir = Path(args.output_dir).expanduser()
     if output_dir.exists() and not output_dir.is_dir():
         raise SystemExit(f"Output directory is not a directory: {output_dir}")
     output_dir.mkdir(parents=True, exist_ok=True)
-    output_bin = output_dir / (
-        COMPENDIUM_BIN_NAME if args.compendium else OUTPUT_BIN_NAME
-    )
-    output_xdelta = output_dir / (
-        COMPENDIUM_XDELTA_NAME if args.compendium else OUTPUT_XDELTA_NAME
-    )
+    output_bin = output_dir / OUTPUT_BIN_NAME
+    output_xdelta = output_dir / OUTPUT_XDELTA_NAME
     print("[1/7] mining compression dictionaries...")
     dictionary, dictionary_bytes = mine_dictionary(BP.DICT_RUNTIME_BUDGET)
     BP.configure_dictionary(dictionary)
@@ -2797,16 +2795,16 @@ def main(argv=None):
     apply_name_tables(exe, slpm, PATHS, widths10)
     cmdinit = bytearray(cmdinit0)
     apply_cmdinit_names(cmdinit)             # REAL new-game party names (CMDINIT.BIN)
-    map_name_caves = MN.COMPENDIUM_CAVES if args.compendium else MN.CAVES
+    map_name_caves = MN.COMPENDIUM_CAVES if enhancements else MN.CAVES
     MN.relocate_map_names(exe, map_name_caves)  # field/location names (save list) -> English, relocated
                                              # to the rodata cave + both pointer tables repointed
     rdlogo = RD.patch_rdlogo(rdlogo0)        # boot disclaimer -> English (fullwidth, repointed)
-    menu_overrides = {COMP.MENU_ENTRY: "Demon Compendium"} if args.compendium else None
+    menu_overrides = {COMP.MENU_ENTRY: "Demon Compendium"} if enhancements else None
     MT.rebuild_menu(exe, PATHS, menu_overrides)
     SS.apply_sys(exe)                        # boot-safe system strings, kept in their original slots
     SS.patch_shop_composed_prompts(exe)      # English item/price confirmation grammar
     SS.patch_composed_prompts(exe)           # one-line "Dismiss <name>?" / "Discard <item>?" confirms
-    if args.compendium:
+    if enhancements:
         compendium_info = COMP.apply(exe)
         print(
             "  Demon Compendium: "
@@ -2817,8 +2815,8 @@ def main(argv=None):
     NE.apply_end_button(exe)                 # END button on the Z/z row; no empty-row scrolling
     print("[6/7] applying dialogue + menu banks...")
     packa = apply_banks(exe, packa0, slpm, PATHS)
-    if compendium_translation_restore is not None:
-        COMP.restore_translations(TR.TRANS, compendium_translation_restore)
+    if enhancement_translation_restore is not None:
+        COMP.restore_translations(TR.TRANS, enhancement_translation_restore)
     STATUS.patch_status_texture(packa, exe)
     NE.patch_atlas(packa, slpm)              # naming-grid atlas texture -> English glyphs
     print("[7/7] writing patched BIN...")

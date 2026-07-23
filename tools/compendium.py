@@ -1,8 +1,7 @@
-"""Optional Cathedral demon-compendium patch.
+"""Cathedral Demon Compendium gameplay enhancement.
 
-This is deliberately an opt-in gameplay enhancement.  The normal translation
-build never calls :func:`apply`, so its executable and save behavior remain
-unchanged.
+The normal translation build applies this enhancement by default.  Passing
+``--no-enhancements`` leaves the executable and save behavior unchanged.
 
 Persistence reuses bit 7 of the game's existing 256-byte, per-demon analysis
 counter at 0x801fc128.  That byte is already included in the stock 0x3260-byte
@@ -118,10 +117,10 @@ PROMPT_RENDER = 0x8002F124
 def prepare_translations(translations):
     """Make the stock summoning rejection valid for every enhanced check.
 
-    The compendium reuses message 0x0008 for both the original alignment
-    restriction and its protagonist-level restriction.  Keep the normal
-    translation build untouched, but use a neutral explanation in this
-    opt-in variant so both situations read correctly.
+    The Compendium reuses message 0x0008 for both the original alignment
+    restriction and its protagonist-level restriction.  Keep the
+    no-enhancements translation build untouched, but use a neutral explanation
+    in the default enhanced build so both situations read correctly.
     """
     previous = translations[0x0008]
     translations[0x0008] = ["That demon can't be summoned.", "ED"]
@@ -822,7 +821,7 @@ def _emit_extra_code():
 
 
 def apply(exe):
-    """Install the optional compendium feature into a translated executable."""
+    """Install the Compendium enhancement into a translated executable."""
 
     # These checks make a wrong revision or collision with another patch fail
     # at build time rather than producing a subtly damaged disc image.

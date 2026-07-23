@@ -13,17 +13,27 @@ your own verified source image.
 
 ## [Unreleased]
 
+## [0.1.6] - 2026-07-22
+
+This release adds a modern Demon Compendium while retaining an explicit
+original-gameplay build, and fixes presentation and text issues present in
+0.1.5.
+
 ### Added
 
-- Added an opt-in Demon Compendium build variant. Previously recruited or
-  fused demons are recorded automatically and can be summoned from the
-  Cathedral of Shadows in their fixed default form for Macca, subject to the
-  protagonist's level, roster space, and duplicate restrictions.
-- Added a third release-patch workflow for the Compendium enhancement while
-  keeping both standard translation builds mechanically unchanged.
+- Added a Demon Compendium to the Cathedral of Shadows. It automatically
+  records recruited demons and completed fusion results, imports demons held
+  by existing saves, provides race/name/level/alignment sorting, displays each
+  demon's Macca cost, and summons fixed default-stat forms subject to the
+  protagonist's level, roster space, and duplicate restrictions. Registration
+  persists through the original save payload without changing its format.
+- Added four release profiles covering English or Japanese movies with either
+  the default enhancements or original gameplay mechanics.
 
 ### Changed
 
+- Enabled gameplay enhancements by default and added `--no-enhancements` as a
+  general opt-out for purist builds and future modern features.
 - Clarified Cathedral fusion warnings that compare the resulting demon's
   alignment with the player's alignment.
 - Expanded the translation-spacing audit to cover adjacent runtime names and
@@ -31,24 +41,6 @@ your own verified source image.
 
 ### Fixed
 
-- Fixed the optional Compendium build hanging before the Cathedral menu or
-  failing to add its menu option before later fusion modes were unlocked.
-- Fixed selecting Demon Compendium silently returning to the field instead of
-  opening the summon browser.
-- Prevented the Compendium code and state cave from overlapping the newer
-  relocated map-name strings in enhanced builds.
-- Prevented the Compendium's sort choices from also being rendered into the
-  Cathedral dialogue windows during browsing, rejection-message transitions,
-  or after returning to the Cathedral menu, and fixed a crash when backing out.
-- Prevented fusion-result previews from registering demons before the fusion
-  is actually completed.
-- Registered the held demon roster when the enhanced Cathedral menu appears,
-  preventing unrecorded fusion ingredients from being lost when fusion is
-  chosen before the Compendium is opened.
-- Registered successfully negotiated demons at the committed roster-grant
-  step, so their records survive dismissal before a Cathedral visit.
-- Made the Compendium summon prompt show the highlighted demon's actual Macca
-  cost instead of the static `LVxLVx20` formula.
 - Restored the equipment-shop header's original name inset so the status icon
   no longer overwrites the first letter of the selected human's name.
 - Made generated movie files inherit the build directory's permissions on
@@ -255,7 +247,8 @@ First public release.
 - Reproducible build (`build.py`) that patches a verified Japan Rev 1 image
   and emits distributable xdelta patches.
 
-[Unreleased]: https://github.com/Roman215/smt2-psx-translation/compare/v0.1.5...HEAD
+[Unreleased]: https://github.com/Roman215/smt2-psx-translation/compare/v0.1.6...HEAD
+[0.1.6]: https://github.com/Roman215/smt2-psx-translation/compare/v0.1.5...v0.1.6
 [0.1.5]: https://github.com/Roman215/smt2-psx-translation/compare/v0.1.4...v0.1.5
 [0.1.4]: https://github.com/Roman215/smt2-psx-translation/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/Roman215/smt2-psx-translation/compare/v0.1.2...v0.1.3

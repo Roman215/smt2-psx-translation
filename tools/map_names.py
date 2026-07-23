@@ -50,10 +50,11 @@ DEMON_NAME_CACHE_CAVE = 0x800d8100
 DEMON_NAME_CACHE_CAVE_END = 0x800d8180
 DEMON_NAME_MIGRATOR_CAVE = 0x800d8180
 DEMON_NAME_MIGRATOR_CAVE_END = 0x800d8290
-# The normal build can use the full first span.  The optional Demon Compendium
-# occupies 0x800d6d20..0x800d7254, so its build stops this span at that exact
-# boundary and moves the remaining names into the second span.  Keeping the
-# layouts separate preserves the standard build's existing binary layout.
+# The no-enhancements build can use the full first span.  The default Demon
+# Compendium occupies 0x800d6d20..0x800d7254, so the enhanced layout stops this
+# span at that exact boundary and moves the remaining names into the second
+# span. Keeping the layouts separate preserves the purist build's existing
+# binary layout.
 CAVES = ((0x800d69a0, 0x800d7014), (0x800d7500, DEMON_NAME_CACHE_CAVE))
 COMPENDIUM_CAVES = (
     (CAVES[0][0], 0x800d6d20),

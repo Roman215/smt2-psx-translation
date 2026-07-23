@@ -16,10 +16,11 @@ build tooling. It does not contain, distribute, or download game data.
 
 Pre-built patches are published on the
 [Releases](https://github.com/Roman215/smt2-psx-translation/releases) page.
-Each release carries three xdelta patches: one with the translated English
-opening and game-over movies, one keeping the original Japanese movies, and a
-clearly named Demon Compendium enhancement variant with the English movies.
-Every release includes `sha256sums.txt` and step-by-step patching instructions.
+Each release carries four xdelta patches covering both choices independently:
+translated English or original Japanese movies, and the recommended enhanced
+gameplay or original mechanics. The unqualified default patch includes English
+movies and gameplay enhancements. Every release includes `sha256sums.txt` and
+step-by-step patching instructions.
 The patches contain no game data; apply one of them to your own verified **Shin
 Megami Tensei II (Japan) (Rev 1)** BIN image with
 [Delta Patcher](https://github.com/marco-calautti/DeltaPatcher/releases) or
@@ -101,33 +102,33 @@ python -m pip install pyxdelta
    python build.py --xdelta
    ```
 
-### Optional Demon Compendium
+### Gameplay enhancements
 
-The standard build preserves the original game mechanics. To build the
-separate gameplay-enhancement variant, pass `--compendium`:
+The default build includes modern gameplay enhancements, currently the
+**Demon Compendium** at the Cathedral of Shadows. To build the translation
+with the original gameplay mechanics instead, pass the general opt-out flag:
 
 ```powershell
-python build.py --compendium
+python build.py --no-enhancements
 ```
 
-This creates `SMT2_EN_COMPENDIUM.bin` (and
-`SMT2_EN_COMPENDIUM.xdelta` when combined with `--xdelta`). At the Cathedral
-of Shadows, its **Demon Compendium** option lists normal demons that the player
-has previously recruited or fused and lets the player summon their fixed,
-default-stat form for `level x level x 20` Macca. Demons above the protagonist's
-level and duplicates already held cannot be summoned. Human party members and
-enemy-only records never enter the list through normal play. Existing party
-demons are registered as soon as the enhanced Cathedral menu is rendered, so
-they remain recorded even if the player chooses fusion before opening the
-Compendium itself. Newly negotiated demons are registered when they are added
-to the party, so abandoning one before visiting the Cathedral does not remove
-its record.
+Both profiles create `SMT2_EN.bin` (and `SMT2_EN.xdelta` with `--xdelta`), so
+use separate output directories when building both. The Compendium lists
+normal demons that the player has previously recruited or fused and lets the
+player summon their fixed, default-stat form for `level x level x 20` Macca.
+Demons above the protagonist's level and duplicates already held cannot be
+summoned. Human party members and enemy-only records never enter the list
+through normal play. Existing party demons are registered as soon as the
+enhanced Cathedral menu is rendered, so they remain recorded even if the
+player chooses fusion before opening the Compendium itself. Newly negotiated
+demons are registered when they are added to the party, so abandoning one
+before visiting the Cathedral does not remove its record.
 
 The enhancement does not enlarge or rewrite the game's save structure. Its
 registration flags reuse the high bit of an existing saved per-demon counter,
 so the original payload size and memory-card checksum process stay unchanged.
 Existing saves can be loaded, but keep a backup or a separate memory card for
-the enhancement variant: returning that save to an unmodified game can make
+the enhanced build: returning that save to an unmodified game can make
 the reused counter appear 128 higher. Conversely, a pre-existing save where a
 particular demon's counter has already reached 128 may initially treat that
 demon as registered. `build.py` never opens or modifies save states or
@@ -162,8 +163,8 @@ push that no game data is tracked in the repository.
   source dialogue directly from a supplied BIN.
 - `tools/opening_movie.py` rebuilds the fixed-layout opening and game-over STRs
   with translated text.
-- `tools/compendium.py` installs the optional Cathedral compendium and its
-  save-compatible registration flags only for `--compendium` builds.
+- `tools/compendium.py` installs the default Cathedral Compendium enhancement
+  and its save-compatible registration flags; `--no-enhancements` skips it.
 
 ## Developer utility
 
