@@ -16,11 +16,12 @@ build tooling. It does not contain, distribute, or download game data.
 
 Pre-built patches are published on the
 [Releases](https://github.com/Roman215/smt2-psx-translation/releases) page.
-Each release carries two xdelta patches — one with the translated English
-opening and game-over movies and one keeping the original Japanese movies — plus
-`sha256sums.txt` and step-by-step patching instructions. The patches contain
-no game data; apply them to your own verified **Shin Megami Tensei II (Japan)
-(Rev 1)** BIN image with
+Each release carries three xdelta patches: one with the translated English
+opening and game-over movies, one keeping the original Japanese movies, and a
+clearly named Demon Compendium enhancement variant with the English movies.
+Every release includes `sha256sums.txt` and step-by-step patching instructions.
+The patches contain no game data; apply one of them to your own verified **Shin
+Megami Tensei II (Japan) (Rev 1)** BIN image with
 [Delta Patcher](https://github.com/marco-calautti/DeltaPatcher/releases) or
 xdelta3.
 
@@ -100,14 +101,46 @@ python -m pip install pyxdelta
    python build.py --xdelta
    ```
 
-The matching CUE can be copied or renamed to refer to `SMT2_EN.bin`. If you
-create an xdelta for distribution, it must be applied to the same verified
+### Optional Demon Compendium
+
+The standard build preserves the original game mechanics. To build the
+separate gameplay-enhancement variant, pass `--compendium`:
+
+```powershell
+python build.py --compendium
+```
+
+This creates `SMT2_EN_COMPENDIUM.bin` (and
+`SMT2_EN_COMPENDIUM.xdelta` when combined with `--xdelta`). At the Cathedral
+of Shadows, its **Demon Compendium** option lists normal demons that the player
+has previously recruited or fused and lets the player summon their fixed,
+default-stat form for `level x level x 20` Macca. Demons above the protagonist's
+level and duplicates already held cannot be summoned. Human party members and
+enemy-only records never enter the list through normal play. Existing party
+demons are registered as soon as the enhanced Cathedral menu is rendered, so
+they remain recorded even if the player chooses fusion before opening the
+Compendium itself. Newly negotiated demons are registered when they are added
+to the party, so abandoning one before visiting the Cathedral does not remove
+its record.
+
+The enhancement does not enlarge or rewrite the game's save structure. Its
+registration flags reuse the high bit of an existing saved per-demon counter,
+so the original payload size and memory-card checksum process stay unchanged.
+Existing saves can be loaded, but keep a backup or a separate memory card for
+the enhancement variant: returning that save to an unmodified game can make
+the reused counter appear 128 higher. Conversely, a pre-existing save where a
+particular demon's counter has already reached 128 may initially treat that
+demon as registered. `build.py` never opens or modifies save states or
+memory-card files.
+
+The matching CUE can be copied or renamed to refer to the generated BIN. If
+you create an xdelta for distribution, it must be applied to the same verified
 source image.
 
 ## Releasing
 
 Version history lives in [CHANGELOG.md](CHANGELOG.md). Maintainers cut
-releases locally with `python release.py X.Y.Z`, which builds both patch
+releases locally with `python release.py X.Y.Z`, which builds all patch
 variants, tags the version, and uploads only the xdelta patches and checksums
 to a GitHub release — see [RELEASING.md](RELEASING.md). CI verifies on every
 push that no game data is tracked in the repository.
@@ -117,7 +150,7 @@ push that no game data is tracked in the repository.
 - `build.py` — full reproducible build; extracts the needed executable and data
   files directly from the supplied BIN, patches them, fixes Mode 2 EDC/ECC, and
   optionally creates an xdelta patch.
-- `release.py` — release automation: builds both patch variants, stages
+- `release.py` — release automation: builds every patch variant, stages
   checksums and notes from `CHANGELOG.md`, and publishes a GitHub release
   containing only distributable files.
 - `tools/translations.py` — dialogue translation source.
@@ -129,6 +162,8 @@ push that no game data is tracked in the repository.
   source dialogue directly from a supplied BIN.
 - `tools/opening_movie.py` rebuilds the fixed-layout opening and game-over STRs
   with translated text.
+- `tools/compendium.py` installs the optional Cathedral compendium and its
+  save-compatible registration flags only for `--compendium` builds.
 
 ## Developer utility
 

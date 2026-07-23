@@ -42,13 +42,15 @@ a normal `python build.py` run.
    python release.py X.Y.Z
    ```
 
-   It builds both variants from scratch (translated movies, and
-   `--skip-movies` for the original Japanese movies), stages everything under
+   It builds all three variants from scratch (translated movies,
+   `--skip-movies` for the original Japanese movies, and the opt-in Demon
+   Compendium enhancement with translated movies), stages everything under
    `build/release/vX.Y.Z/`, hashes the source and outputs, pushes the
    `vX.Y.Z` tag, and creates a **draft** GitHub release with:
 
    - `SMT2_EN_vX.Y.Z.xdelta` — English opening and game-over movies
    - `SMT2_EN_vX.Y.Z_JP_movies.xdelta` — original Japanese movies
+   - `SMT2_EN_vX.Y.Z_COMPENDIUM.xdelta` — English movies plus Demon Compendium
    - `sha256sums.txt` — patch and expected-output checksums
 
    The release notes are generated from the version's `CHANGELOG.md` section
@@ -56,7 +58,9 @@ a normal `python build.py` run.
 
 4. Optionally boot-test the staged images
    (`build/release/vX.Y.Z/en-movies/SMT2_EN.bin` and
-   `.../jp-movies/SMT2_EN.bin`) — they are local-only and never uploaded.
+   `.../jp-movies/SMT2_EN.bin`, plus
+   `.../compendium/SMT2_EN_COMPENDIUM.bin`) — they are local-only and never
+   uploaded.
 
 5. Publish the draft from the GitHub Releases page, or:
 
@@ -67,7 +71,7 @@ a normal `python build.py` run.
    (Use `python release.py X.Y.Z --publish` to skip the draft stage
    entirely.)
 
-6. `build/release/vX.Y.Z/` can be deleted afterwards to reclaim ~450 MB.
+6. `build/release/vX.Y.Z/` can be deleted afterwards to reclaim ~675 MB.
 
 ## Recovering from a failed run
 

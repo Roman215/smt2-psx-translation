@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """SMT2 PSX translation -- release automation.
 
-Builds the two distributable xdelta patches (translated movies and original
-Japanese movies), stages release notes and checksums, tags
-the version, and creates a GitHub release carrying ONLY the patch files.
+Builds the three distributable xdelta patches (translated movies, original
+Japanese movies, and the opt-in Demon Compendium variant), stages release
+notes and checksums, tags the version, and creates a GitHub release carrying
+ONLY the patch files.
 
 Game data never leaves this machine: the build runs locally against your own
 source image, and a hard allowlist (`assert_assets_safe`) refuses to upload
@@ -14,7 +15,7 @@ Typical flow (see RELEASING.md):
     1. Move the [Unreleased] notes in CHANGELOG.md under a new version
        heading, commit everything.
     2. python release.py 0.1.0
-    3. Test build/release/v0.1.0/*/SMT2_EN.bin if desired, then publish the
+    3. Test build/release/v0.1.0/*/*.bin if desired, then publish the
        draft release on GitHub (or re-run with --publish next time).
 """
 import argparse
@@ -170,10 +171,12 @@ def preflight(version, args):
     return tag, gh, notes_body, input_bin, build_module
 
 
-def build_variant(staging, name, english_movies, input_bin):
+def build_variant(staging, name, english_movies, input_bin, compendium=False):
     """Run one full build; return the resulting xdelta path."""
     variant_dir = staging / name
     command = [sys.executable, "build.py", "--xdelta", "--output-dir", str(variant_dir)]
+    if compendium:
+        command.append("--compendium")
     # --require-movies aborts the build at the movie step, so a failed movie
     # can never fall back to Japanese video in the English-movie patch.
     command.append("--require-movies" if english_movies else "--skip-movies")
@@ -190,14 +193,15 @@ def build_variant(staging, name, english_movies, input_bin):
             "(see WARNING above). Releases must not silently ship the "
             "wrong movie -- fix FFmpeg/psxavenc availability and retry."
         )
-    return verify_variant(staging, name, english_movies)
+    return verify_variant(staging, name, english_movies, compendium)
 
 
-def verify_variant(staging, name, english_movies):
+def verify_variant(staging, name, english_movies, compendium=False):
     """Check a built (or --skip-build reused) variant's artifacts."""
     variant_dir = staging / name
-    xdelta = variant_dir / "SMT2_EN.xdelta"
-    output_bin = variant_dir / "SMT2_EN.bin"
+    stem = "SMT2_EN_COMPENDIUM" if compendium else "SMT2_EN"
+    xdelta = variant_dir / f"{stem}.xdelta"
+    output_bin = variant_dir / f"{stem}.bin"
     for artifact in (xdelta, output_bin):
         if not artifact.is_file():
             fail(f"variant `{name}` is missing {artifact}")
@@ -234,14 +238,20 @@ def assert_assets_safe(assets, expected_bin_size):
             )
 
 
-def stage_release(staging, version, en_xdelta, jp_xdelta, input_bin, notes_body, build_module):
+def stage_release(
+    staging, version, en_xdelta, jp_xdelta, compendium_xdelta,
+    input_bin, notes_body, build_module,
+):
     """Copy patches to versioned names; write checksums and release notes."""
     en_name = f"SMT2_EN_v{version}.xdelta"
     jp_name = f"SMT2_EN_v{version}_JP_movies.xdelta"
+    compendium_name = f"SMT2_EN_v{version}_COMPENDIUM.xdelta"
     en_asset = staging / en_name
     jp_asset = staging / jp_name
+    compendium_asset = staging / compendium_name
     shutil.copy2(en_xdelta, en_asset)
     shutil.copy2(jp_xdelta, jp_asset)
+    shutil.copy2(compendium_xdelta, compendium_asset)
 
     # The English-movie patch rewrites both movie regions, so it must be
     # substantially larger than the Japanese-movie patch. Equality means the
@@ -256,8 +266,12 @@ def stage_release(staging, version, en_xdelta, jp_xdelta, input_bin, notes_body,
     source_sha = sha256_file(input_bin)
     en_bin_sha = sha256_file(staging / "en-movies" / "SMT2_EN.bin")
     jp_bin_sha = sha256_file(staging / "jp-movies" / "SMT2_EN.bin")
+    compendium_bin_sha = sha256_file(
+        staging / "compendium" / "SMT2_EN_COMPENDIUM.bin"
+    )
     en_sha = sha256_file(en_asset)
     jp_sha = sha256_file(jp_asset)
+    compendium_sha = sha256_file(compendium_asset)
 
     sums = staging / "sha256sums.txt"
     sums.write_text(
@@ -267,8 +281,10 @@ def stage_release(staging, version, en_xdelta, jp_xdelta, input_bin, notes_body,
         f"# Source BIN sha256:  {source_sha}\n"
         f"# Patched BIN sha256 ({en_name}): {en_bin_sha}\n"
         f"# Patched BIN sha256 ({jp_name}): {jp_bin_sha}\n"
+        f"# Patched BIN sha256 ({compendium_name}): {compendium_bin_sha}\n"
         f"{en_sha}  {en_name}\n"
-        f"{jp_sha}  {jp_name}\n",
+        f"{jp_sha}  {jp_name}\n"
+        f"{compendium_sha}  {compendium_name}\n",
         encoding="utf-8",
     )
 
@@ -279,7 +295,11 @@ def stage_release(staging, version, en_xdelta, jp_xdelta, input_bin, notes_body,
         "| File | Contents |\n"
         "| --- | --- |\n"
         f"| `{en_name}` | Full translation, English opening and game-over movies |\n"
-        f"| `{jp_name}` | Full translation, original Japanese movies |\n\n"
+        f"| `{jp_name}` | Full translation, original Japanese movies |\n"
+        f"| `{compendium_name}` | Full translation, English movies, plus the optional Demon Compendium |\n\n"
+        "The Compendium variant automatically records recruited and fused demons,\n"
+        "then lets you summon default-stat copies from the Cathedral for Macca.\n"
+        "Use it instead of, not together with, either standard patch.\n\n"
         "The patches contain no game data. You need your own dump of the game;\n"
         "use only an image created from media you own, where permitted by\n"
         "applicable law.\n\n"
@@ -296,6 +316,7 @@ def stage_release(staging, version, en_xdelta, jp_xdelta, input_bin, notes_body,
         "3. Optionally verify the result against `sha256sums.txt`:\n"
         f"   - `{en_name}` output: `{en_bin_sha}`\n"
         f"   - `{jp_name}` output: `{jp_bin_sha}`\n"
+        f"   - `{compendium_name}` output: `{compendium_bin_sha}`\n"
         "4. Create `SMT2_EN.cue` next to the patched BIN with this content:\n\n"
         "   ```\n"
         "   FILE \"SMT2_EN.bin\" BINARY\n"
@@ -304,7 +325,7 @@ def stage_release(staging, version, en_xdelta, jp_xdelta, input_bin, notes_body,
         "   ```\n",
         encoding="utf-8",
     )
-    return [en_asset, jp_asset, sums], notes
+    return [en_asset, jp_asset, compendium_asset, sums], notes
 
 
 def publish(tag, version, gh, assets, notes, draft):
@@ -364,12 +385,19 @@ def main(argv=None):
         print("reusing existing build artifacts (--skip-build)")
         en_xdelta = verify_variant(staging, "en-movies", english_movies=True)
         jp_xdelta = verify_variant(staging, "jp-movies", english_movies=False)
+        compendium_xdelta = verify_variant(
+            staging, "compendium", english_movies=True, compendium=True
+        )
     else:
         en_xdelta = build_variant(staging, "en-movies", True, input_bin)
         jp_xdelta = build_variant(staging, "jp-movies", False, input_bin)
+        compendium_xdelta = build_variant(
+            staging, "compendium", True, input_bin, compendium=True
+        )
 
     assets, notes = stage_release(
-        staging, version, en_xdelta, jp_xdelta, input_bin, notes_body, build_module
+        staging, version, en_xdelta, jp_xdelta, compendium_xdelta,
+        input_bin, notes_body, build_module,
     )
     assert_assets_safe(assets, build_module.EXPECTED_BIN_SIZE)
     publish(tag, version, gh, assets, notes, draft=not args.publish)

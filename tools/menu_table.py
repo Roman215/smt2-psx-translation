@@ -427,7 +427,7 @@ def rebuild_ab_menu(exe, paths):
     verify_ab_menu(exe)
     return used,budget
 
-def rebuild_menu(exe, PATHS):
+def rebuild_menu(exe, PATHS, overrides=None):
     def foff(a): return (a-0x80010000)+0x800
     ED=(0x4544,True)
     def enc(s):
@@ -441,8 +441,9 @@ def rebuild_menu(exe, PATHS):
         if not hi: data.append(b)
         return bytes(data)
     offs=[]; blob=bytearray()
+    overrides = overrides or {}
     for i in range(N_MENU):
-        offs.append(len(blob)); blob+=enc(MENU.get(i,""))
+        offs.append(len(blob)); blob+=enc(overrides.get(i, MENU.get(i,"")))
     budget=MENU_END-MENU_DATA
     if len(blob)>budget: raise SystemExit(f"menu table OVERFLOW {len(blob)}>{budget}")
     for i,o in enumerate(offs): struct.pack_into("<H",exe,foff(MENU_OT+i*2),o)

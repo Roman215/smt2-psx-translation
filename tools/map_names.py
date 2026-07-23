@@ -50,7 +50,15 @@ DEMON_NAME_CACHE_CAVE = 0x800d8100
 DEMON_NAME_CACHE_CAVE_END = 0x800d8180
 DEMON_NAME_MIGRATOR_CAVE = 0x800d8180
 DEMON_NAME_MIGRATOR_CAVE_END = 0x800d8290
+# The normal build can use the full first span.  The optional Demon Compendium
+# occupies 0x800d6d20..0x800d7254, so its build stops this span at that exact
+# boundary and moves the remaining names into the second span.  Keeping the
+# layouts separate preserves the standard build's existing binary layout.
 CAVES = ((0x800d69a0, 0x800d7014), (0x800d7500, DEMON_NAME_CACHE_CAVE))
+COMPENDIUM_CAVES = (
+    (CAVES[0][0], 0x800d6d20),
+    (CAVES[1][0], 0x800d7ff0),
+)
 CAVE_HI = CAVES[-1][1]                        # 0x800d8100+ reserved by build.py
 BR = 0x8197                                   # line-break control char (invisible)
 
@@ -124,7 +132,7 @@ def _read_table(exe, base, count):
     return [struct.unpack_from("<I", exe, _foff(base) + i * 4)[0] for i in range(count)]
 
 
-def relocate_map_names(exe):
+def relocate_map_names(exe, caves=CAVES):
     """Translate the field/location names, write them into the rodata cave, and repoint
     the AREA + MAP pointer tables. exe is a bytearray of the SLPM file."""
     area = _read_table(exe, AREA_TABLE, AREA_COUNT)
@@ -137,7 +145,7 @@ def relocate_map_names(exe):
     # A name never straddles two spans, so a name that does not fit the span in hand
     # starts the next one; the few bytes left behind are the only waste.
     remap = {}
-    spans = list(CAVES)
+    spans = list(caves)
     pos, end = spans.pop(0)
     used = 0
     for addr, en in zip(uniq, ENGLISH):

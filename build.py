@@ -25,6 +25,7 @@ import rdlogo as RD, map_names as MN, status_screen as STATUS
 import name_entry as NE
 import opening_movie as OM
 import overlay_text as OT
+import compendium as COMP
 from cdecc import fix_mode2form1
 
 CMDINIT_SECTOR = 67152                        # CMDINIT.BIN base sector in the bin
@@ -65,6 +66,8 @@ EXPECTED_BIN_SIZE = 222_694_416
 DEFAULT_OUTPUT_DIR = "build"
 OUTPUT_BIN_NAME = "SMT2_EN.bin"
 OUTPUT_XDELTA_NAME = "SMT2_EN.xdelta"
+COMPENDIUM_BIN_NAME = "SMT2_EN_COMPENDIUM.bin"
+COMPENDIUM_XDELTA_NAME = "SMT2_EN_COMPENDIUM.xdelta"
 
 # ============================ DICTIONARY MINING ============================
 # The compression dictionary is derived deterministically from the authored
@@ -2583,6 +2586,75 @@ def build_movies(
         return None
 
 
+def _validate_cave_layouts():
+    """Reject overlapping static EXE reservations in either build variant."""
+
+    common = [
+        ("line-break guard", LINE_BREAK_CAVE, MN.CAVES[0][0]),
+        ("VWF hook", 0x800d7254, 0x800d7294),
+        ("raw-printer VWF hook", 0x800d7294, OBJ_SCR12),
+        ("object-printer scratch", OBJ_SCR12, OBJ_SCR10 + 1),
+        ("VWF width table", 0x800d7300, 0x800d7500),
+        ("demon-name cache converter", MN.DEMON_NAME_CACHE_CAVE,
+         MN.DEMON_NAME_CACHE_CAVE_END),
+        ("cached-name migrator", MN.DEMON_NAME_MIGRATOR_CAVE,
+         MN.DEMON_NAME_MIGRATOR_CAVE_END),
+        ("casino prize-name measurer", PRIZE_CAVE, PRIZE_CAVE_END),
+        ("system-string printer and ASCII table", 0x800d8300, 0x800d8500),
+        ("relocated bank 7", BANK7_CAVE, BP.AB4_HANDLER),
+        ("A/B dictionary continuation", BP.AB4_HANDLER, BP.DICT_BASE),
+        ("dictionary runtime", BP.DICT_BASE, BP.CAVE_END),
+        ("name-insert buffer", BP.NAME_INSERT_BUF,
+         BP.NAME_INSERT_BUF + BP.NAME_INSERT_BUF_WORDS * 4),
+        ("dictionary dispatch glue", BP.EMIT_GATE, BP.SYM),
+        ("object-printer SYM tail", BP.SYM + BP.STCAP - BP.SYM_TAIL_RESERVE,
+         BP.SYM + BP.STCAP),
+    ]
+    for index, (start, end) in enumerate(MT.AB_MENU_REGIONS, 1):
+        common.append((f"A/B menu strings {index}", start, end))
+
+    layouts = {
+        "standard": common + [
+            (f"map-name strings {index}", start, end)
+            for index, (start, end) in enumerate(MN.CAVES, 1)
+        ],
+        "compendium": common + [
+            (f"map-name strings {index}", start, end)
+            for index, (start, end) in enumerate(MN.COMPENDIUM_CAVES, 1)
+        ] + [
+            ("Demon Compendium", COMP.CAVE, COMP.CAVE_END),
+            ("Demon Compendium price formatter", COMP.EXTRA_CAVE,
+             COMP.EXTRA_CAVE_END),
+        ],
+    }
+
+    if MN.COMPENDIUM_CAVES[0][1] != COMP.CAVE:
+        raise SystemExit(
+            "compendium map-name reservation no longer ends at the code cave"
+        )
+    if MN.COMPENDIUM_CAVES[1][1] != COMP.EXTRA_CAVE:
+        raise SystemExit(
+            "compendium map-name reservation no longer ends at the price cave"
+        )
+    for layout_name, ranges in layouts.items():
+        ordered = sorted(ranges, key=lambda item: (item[1], item[2], item[0]))
+        for description, start, end in ordered:
+            if start >= end:
+                raise SystemExit(
+                    f"{layout_name} cave `{description}` has invalid range "
+                    f"{start:#x}..{end:#x}"
+                )
+        for previous, current in zip(ordered, ordered[1:]):
+            previous_description, previous_start, previous_end = previous
+            current_description, current_start, current_end = current
+            if current_start < previous_end:
+                raise SystemExit(
+                    f"{layout_name} cave overlap: `{previous_description}` "
+                    f"{previous_start:#x}..{previous_end:#x} and "
+                    f"`{current_description}` {current_start:#x}..{current_end:#x}"
+                )
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(
         description="Build the SMT2 PSX English translation."
@@ -2625,16 +2697,33 @@ def main(argv=None):
     parser.add_argument(
         "--xdelta",
         action="store_true",
-        help="also create SMT2_EN.xdelta (requires the optional pyxdelta package)",
+        help="also create the selected variant's xdelta (requires pyxdelta)",
+    )
+    parser.add_argument(
+        "--compendium",
+        action="store_true",
+        help="build the optional Demon Compendium gameplay-enhancement variant",
     )
     args = parser.parse_args(argv)
+    _validate_cave_layouts()
+    compendium_translation_restore = None
+    if args.compendium:
+        # This happens before dictionary mining and bank construction so the
+        # optional variant's neutral summoning-rejection text is encoded like
+        # every other authored message. The standard build is byte-for-byte
+        # unaffected.
+        compendium_translation_restore = COMP.prepare_translations(TR.TRANS)
     pyxdelta = require_pyxdelta() if args.xdelta else None
     output_dir = Path(args.output_dir).expanduser()
     if output_dir.exists() and not output_dir.is_dir():
         raise SystemExit(f"Output directory is not a directory: {output_dir}")
     output_dir.mkdir(parents=True, exist_ok=True)
-    output_bin = output_dir / OUTPUT_BIN_NAME
-    output_xdelta = output_dir / OUTPUT_XDELTA_NAME
+    output_bin = output_dir / (
+        COMPENDIUM_BIN_NAME if args.compendium else OUTPUT_BIN_NAME
+    )
+    output_xdelta = output_dir / (
+        COMPENDIUM_XDELTA_NAME if args.compendium else OUTPUT_XDELTA_NAME
+    )
     print("[1/7] mining compression dictionaries...")
     dictionary, dictionary_bytes = mine_dictionary(BP.DICT_RUNTIME_BUDGET)
     BP.configure_dictionary(dictionary)
@@ -2708,17 +2797,28 @@ def main(argv=None):
     apply_name_tables(exe, slpm, PATHS, widths10)
     cmdinit = bytearray(cmdinit0)
     apply_cmdinit_names(cmdinit)             # REAL new-game party names (CMDINIT.BIN)
-    MN.relocate_map_names(exe)               # field/location names (save list) -> English, relocated
+    map_name_caves = MN.COMPENDIUM_CAVES if args.compendium else MN.CAVES
+    MN.relocate_map_names(exe, map_name_caves)  # field/location names (save list) -> English, relocated
                                              # to the rodata cave + both pointer tables repointed
     rdlogo = RD.patch_rdlogo(rdlogo0)        # boot disclaimer -> English (fullwidth, repointed)
-    MT.rebuild_menu(exe, PATHS)
+    menu_overrides = {COMP.MENU_ENTRY: "Demon Compendium"} if args.compendium else None
+    MT.rebuild_menu(exe, PATHS, menu_overrides)
     SS.apply_sys(exe)                        # boot-safe system strings, kept in their original slots
     SS.patch_shop_composed_prompts(exe)      # English item/price confirmation grammar
     SS.patch_composed_prompts(exe)           # one-line "Dismiss <name>?" / "Discard <item>?" confirms
+    if args.compendium:
+        compendium_info = COMP.apply(exe)
+        print(
+            "  Demon Compendium: "
+            f"{compendium_info['code_bytes']}/{compendium_info['code_capacity']} "
+            "code bytes; stock save payload retained"
+        )
     NE.apply_name_entry(exe)                 # naming-screen kana grid -> A-Z/a-z/0-9 + specials
     NE.apply_end_button(exe)                 # END button on the Z/z row; no empty-row scrolling
     print("[6/7] applying dialogue + menu banks...")
     packa = apply_banks(exe, packa0, slpm, PATHS)
+    if compendium_translation_restore is not None:
+        COMP.restore_translations(TR.TRANS, compendium_translation_restore)
     STATUS.patch_status_texture(packa, exe)
     NE.patch_atlas(packa, slpm)              # naming-grid atlas texture -> English glyphs
     print("[7/7] writing patched BIN...")

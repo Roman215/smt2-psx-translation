@@ -13,6 +13,15 @@ your own verified source image.
 
 ## [Unreleased]
 
+### Added
+
+- Added an opt-in Demon Compendium build variant. Previously recruited or
+  fused demons are recorded automatically and can be summoned from the
+  Cathedral of Shadows in their fixed default form for Macca, subject to the
+  protagonist's level, roster space, and duplicate restrictions.
+- Added a third release-patch workflow for the Compendium enhancement while
+  keeping both standard translation builds mechanically unchanged.
+
 ### Changed
 
 - Clarified Cathedral fusion warnings that compare the resulting demon's
@@ -22,6 +31,24 @@ your own verified source image.
 
 ### Fixed
 
+- Fixed the optional Compendium build hanging before the Cathedral menu or
+  failing to add its menu option before later fusion modes were unlocked.
+- Fixed selecting Demon Compendium silently returning to the field instead of
+  opening the summon browser.
+- Prevented the Compendium code and state cave from overlapping the newer
+  relocated map-name strings in enhanced builds.
+- Prevented the Compendium's sort choices from also being rendered into the
+  Cathedral dialogue windows during browsing, rejection-message transitions,
+  or after returning to the Cathedral menu, and fixed a crash when backing out.
+- Prevented fusion-result previews from registering demons before the fusion
+  is actually completed.
+- Registered the held demon roster when the enhanced Cathedral menu appears,
+  preventing unrecorded fusion ingredients from being lost when fusion is
+  chosen before the Compendium is opened.
+- Registered successfully negotiated demons at the committed roster-grant
+  step, so their records survive dismissal before a Cathedral visit.
+- Made the Compendium summon prompt show the highlighted demon's actual Macca
+  cost instead of the static `LVxLVx20` formula.
 - Restored the equipment-shop header's original name inset so the status icon
   no longer overwrites the first letter of the selected human's name.
 - Made generated movie files inherit the build directory's permissions on
