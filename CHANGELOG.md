@@ -13,6 +13,13 @@ your own verified source image.
 
 ## [Unreleased]
 
+### Fixed
+
+- Expanded the Demon Compendium's reused Devil Analysis sort tables from the
+  stock 186 enemy-oriented candidates to all 254 registerable base-table
+  demons, allowing fusion-only Elements such as Aquans and every other acquired
+  demon to appear.
+
 ## [0.1.6] - 2026-07-22
 
 This release adds a modern Demon Compendium while retaining an explicit

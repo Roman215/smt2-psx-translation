@@ -2805,11 +2805,12 @@ def main(argv=None):
     SS.patch_shop_composed_prompts(exe)      # English item/price confirmation grammar
     SS.patch_composed_prompts(exe)           # one-line "Dismiss <name>?" / "Discard <item>?" confirms
     if enhancements:
-        compendium_info = COMP.apply(exe)
+        compendium_info = COMP.apply(exe, NT.DEMONS)
         print(
             "  Demon Compendium: "
             f"{compendium_info['code_bytes']}/{compendium_info['code_capacity']} "
-            "code bytes; stock save payload retained"
+            f"code bytes; {compendium_info['analysis_records_added']} "
+            "stock Analysis omissions added; stock save payload retained"
         )
     NE.apply_name_entry(exe)                 # naming-screen kana grid -> A-Z/a-z/0-9 + specials
     NE.apply_end_button(exe)                 # END button on the Z/z row; no empty-row scrolling

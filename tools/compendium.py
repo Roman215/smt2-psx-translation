@@ -97,6 +97,49 @@ GRANT_DEMON = 0x8001975C
 # remove the prototype's sort-menu bypass hook before installing current code.
 LEGACY_SORT_MENU_CHECK = 0x8002EF98
 SORTED_DEMON_IDS = 0x80124090
+# Devil Analysis does not discover candidates by scanning the demon table.
+# Each of its four sort modes walks one fixed 256-byte ID order and stops at
+# the first 0xff.  The stock orders contain only the 186 demons which Analysis
+# was designed to describe; all four omit the same 69 IDs, including every
+# fusion-only Element.  The Compendium availability hook cannot admit an ID
+# which these tables never submit, so the enhanced build expands each order to
+# IDs 1..254.  ID zero (Satan) remains excluded for the same empty-record
+# reasons as migrate_roster and initial_scan.
+ANALYSIS_SORT_TABLES = {
+    "alignment": 0x800E9CB4,
+    "name": 0x800E9DB4,
+    "level": 0x800E9EB4,
+    "race": 0x800E9FB4,
+}
+ANALYSIS_SORT_SOURCE_SHA256 = {
+    "alignment": "ff8f887c1a2d5b1475a905e31990b923962688c27563c68202eaad05a8e0bd20",
+    "name": "922fbcd9ad3cd4872751d4cc5992487aa8d218ef021adc074fbac8cb3a7ef7a1",
+    "level": "b1fb7237de0eb61d6e97d7d593b898edd483cb3e2aa3d8ef85878aeb8551e90a",
+    "race": "6c678d7aae23d2e92b30e2dbfd54ec04cf26ab9118036168be042d20dc2d38aa",
+}
+# Normal demon IDs are grouped by race; each boundary is the first ID of the
+# following race.  Race zero contains only demon ID zero and is intentionally
+# outside the registerable range.
+ANALYSIS_RACE_BOUNDARIES = (
+    0, 10, 17, 22, 28, 38, 44, 50, 58, 63, 70, 76, 84, 90,
+    97, 104, 111, 117, 124, 130, 136, 145, 151, 159, 166, 173,
+    178, 183, 188, 194, 196, 204, 212, 216, 222, 229, 235, 241,
+    246, 252, 255,
+)
+# These reproduce the stock relative race and alignment orders exactly.  Holy
+# (7) and Element (8), the two races wholly absent from the stock candidates,
+# are inserted into their natural Light-Neutral and Neutral-Neutral groups.
+ANALYSIS_RACE_ORDER = (
+    5, 4, 2, 9, 11, 12, 1, 10, 3, 6, 7, 8, 17, 19, 21, 13,
+    23, 16, 14, 18, 25, 24, 20, 22, 15, 26, 27, 35, 36, 28,
+    32, 31, 37, 38, 34, 39, 29, 40, 30, 33,
+)
+ANALYSIS_ALIGNMENT_ORDER = (
+    1, 2, 3, 13, 14, 15, 27, 28, 29, 30,
+    4, 5, 6, 7,
+    8, 16, 17, 18, 19, 20, 21, 22, 31, 32, 33, 34,
+    9, 10, 11, 12, 23, 24, 25, 26, 35, 36, 37, 38, 39, 40,
+)
 # Devil Analysis' list-window object.  The stock selection handler reads the
 # absolute highlighted index at +0x8e (unlike +0x80, which is only the cursor's
 # visible row and would become wrong after scrolling a longer list).
@@ -256,6 +299,108 @@ def _patch_jump(exe, address, target):
 def _patch_call(exe, address, target):
     struct.pack_into("<I", exe, _foff(address),
                      (0x03 << 26) | ((target >> 2) & 0x03FFFFFF))
+
+
+def _analysis_race(demon_id):
+    for race, boundary in enumerate(ANALYSIS_RACE_BOUNDARIES):
+        if demon_id < boundary:
+            return race
+    raise ValueError(f"demon ID outside the base table: {demon_id}")
+
+
+def _expand_analysis_sort_tables(exe, demon_names):
+    """Make every registerable base-table demon a sortable candidate.
+
+    Availability remains controlled by the stock Analysis counter or, while
+    the Compendium is active, by its registration bit.  Expanding these source
+    orders therefore does not make unregistered records visible.
+    """
+    if len(demon_names) < 255:
+        raise SystemExit(
+            "compendium: the translated demon-name table has fewer than "
+            "255 base records"
+        )
+
+    source_orders = {}
+    for label, address in ANALYSIS_SORT_TABLES.items():
+        source = bytes(exe[_foff(address):_foff(address) + 256])
+        digest = hashlib.sha256(source).hexdigest()
+        expected = ANALYSIS_SORT_SOURCE_SHA256[label]
+        if digest != expected:
+            raise SystemExit(
+                f"compendium: {label} Analysis order at {address:#x} is not "
+                f"pristine: expected SHA-256 {expected}, got {digest}"
+            )
+        sentinel = source.index(0xFF)
+        source_orders[label] = list(source[:sentinel])
+
+    stock_ids = set(source_orders["race"])
+    if len(stock_ids) != 186 or any(set(order) != stock_ids
+                                    for order in source_orders.values()):
+        raise SystemExit(
+            "compendium: stock Analysis sort tables no longer share the "
+            "expected 186 demon candidates"
+        )
+
+    demon_ids = list(range(1, 255))
+    race_rank = {race: rank for rank, race in enumerate(ANALYSIS_RACE_ORDER)}
+    alignment_rank = {
+        race: rank for rank, race in enumerate(ANALYSIS_ALIGNMENT_ORDER)
+    }
+    if set(race_rank) != set(range(1, 41)):
+        raise SystemExit("compendium: full Analysis race order is incomplete")
+    if set(alignment_rank) != set(range(1, 41)):
+        raise SystemExit("compendium: full Analysis alignment order is incomplete")
+
+    def name_key(demon_id):
+        return (
+            demon_names[demon_id].casefold(),
+            demon_names[demon_id],
+            demon_id,
+        )
+    levels = exe[
+        _foff(DEMON_BASE_STATS):
+        _foff(DEMON_BASE_STATS) + 255 * 32:
+        32
+    ]
+    orders = {
+        "alignment": sorted(
+            demon_ids,
+            key=lambda demon_id: (
+                alignment_rank[_analysis_race(demon_id)], demon_id
+            ),
+        ),
+        # The stock table follows Japanese name order.  Once the names are
+        # translated, rebuilding it alphabetically also makes the existing
+        # "Sort by name" option match what the English list displays.
+        "name": sorted(demon_ids, key=name_key),
+        # Stock level ties are resolved by its name order, so use the matching
+        # translated-name tie break here.
+        "level": sorted(
+            demon_ids,
+            key=lambda demon_id: (-levels[demon_id], name_key(demon_id)),
+        ),
+        "race": sorted(
+            demon_ids,
+            key=lambda demon_id: (
+                race_rank[_analysis_race(demon_id)], demon_id
+            ),
+        ),
+    }
+    expected_ids = set(demon_ids)
+    for label, order in orders.items():
+        if len(order) != 254 or set(order) != expected_ids:
+            raise SystemExit(
+                f"compendium: generated {label} Analysis order is not a "
+                "complete permutation of demon IDs 1..254"
+            )
+        # Two sentinels fill the 256-byte table.  The sorter stops at the
+        # first, after all 254 registerable records have been considered.
+        data = bytes(order) + b"\xFF\xFF"
+        address = ANALYSIS_SORT_TABLES[label]
+        exe[_foff(address):_foff(address) + 256] = data
+
+    return len(expected_ids - stock_ids)
 
 
 def _emit_code():
@@ -820,8 +965,13 @@ def _emit_extra_code():
     return a, a.blob()
 
 
-def apply(exe):
+def apply(exe, demon_names=None):
     """Install the Compendium enhancement into a translated executable."""
+
+    if demon_names is None:
+        # Keep direct utility/test callers compatible while letting build.py
+        # pass its already imported translation table explicitly.
+        from name_tables import DEMONS as demon_names
 
     # These checks make a wrong revision or collision with another patch fail
     # at build time rather than producing a subtly damaged disc image.
@@ -875,6 +1025,8 @@ def apply(exe):
     }
     for address, data in expected.items():
         _expect(exe, address, data, "unexpected hook instructions")
+
+    analysis_records_added = _expand_analysis_sort_tables(exe, demon_names)
 
     asm, code = _emit_code()
     if CAVE + len(code) > CAVE_CODE_END:
@@ -942,4 +1094,5 @@ def apply(exe):
         "price_code_bytes": len(extra_code),
         "persistent_bytes_added": 0,
         "save_payload_size": 0x3260,
+        "analysis_records_added": analysis_records_added,
     }

@@ -11,7 +11,7 @@ DEMONS = [
  "Garuda","Suzaku","Yatagarasu","Phoenix","Suparna","Lakshmi","Parvati","Freyja","Sarasvati",
  "Arianrhod","Ame-no-Uzume","Ardha","Virocana","Kalki","Baal","Atavaka","Odin","Ashtar","Horus",
  "Thor","Indra","Barong","Genbu","Anubis","Narasinha","Sphinx","Nandi","Byakko","Pabilsag","Bastet",
- "Apis","Unicorn","Heqet","Salamander","Undine","Sylph","Gnome","Flamies","Aquans","Aeros","Earthies",
+ "Apis","Unicorn","Heqet","Salamander","Undine","Sylph","Gnome","Flaemis","Aquans","Aeros","Erthys",
  "Shiva","Susano-o","Seiten Taisei","Chernobog","Ares","Ananta","Rahabh","Itzamna","Seiryuu",
  "Quetzalcoatl","Pek Young","Maya","Kali","Ishtar","Durga","Kikuri-hime","Hariti","Ta-weret",
  "Arahabaki","Takeminakata","O-namuchi","Kotoshironushi","Sarutahiko","Hitokotonushi","Sukunahikona",
@@ -107,7 +107,7 @@ ITEMS = [
  "Beretta 92F","Desert Eagle","Miracle Glock","Gonz Pistol","Dominator","Gyro Jet","M16 Rifle","Smile Steyr",
  "M249 Minimi","SPAS 12","Oni Cannon","Reaper Colt","Bullet M90","Golden Gun","M134 Vulcan","Giga Smasher",
  "Kunitomo Gun","Railgun","Bodribin","Blaster Gun","Randal Custom","Megido Fire","Peacemaker","Brahmastra",
- "Normal Ammo","Poison Ammo","Shot Shell","Randy Shot","Nerve Ammo","Cursed Ammo","Cup Killer","Holy Ammo",
+ "Normal Ammo","Poison Ammo","Shot Shell","Randy Shot","Nerve Ammo","Cursed Ammo","Cop Killer","Holy Ammo",
  "Seal Ammo","Plutonium Ammo","Carbo Liner","Corona Shot","Light Ammo","Dark Ammo","Corrode Ammo","Skull Ammo",
  # 128-207 armor (helm/body/gauntlet/greaves)
  "Headgear","Fritz Helm","Nap Guard","Metal Turban","Iron Bunny","Frog Helm","Dolphin Helm","Ping-Pong Hat",

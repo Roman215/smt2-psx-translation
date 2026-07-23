@@ -113,16 +113,17 @@ python build.py --no-enhancements
 ```
 
 Both profiles create `SMT2_EN.bin` (and `SMT2_EN.xdelta` with `--xdelta`), so
-use separate output directories when building both. The Compendium lists
-normal demons that the player has previously recruited or fused and lets the
-player summon their fixed, default-stat form for `level x level x 20` Macca.
-Demons above the protagonist's level and duplicates already held cannot be
-summoned. Human party members and enemy-only records never enter the list
-through normal play. Existing party demons are registered as soon as the
-enhanced Cathedral menu is rendered, so they remain recorded even if the
-player chooses fusion before opening the Compendium itself. Newly negotiated
-demons are registered when they are added to the party, so abandoning one
-before visiting the Cathedral does not remove its record.
+use separate output directories when building both. The Compendium lists every
+base-table demon that the player has previously recruited or fused, including
+fusion-only races such as Elements, and lets the player summon its fixed,
+default-stat form for `level x level x 20` Macca. Demons above the protagonist's
+level and duplicates already held cannot be summoned. Human party members and
+enemy-only records never enter the list through normal play. Existing party
+demons are registered as soon as the enhanced Cathedral menu is rendered, so
+they remain recorded even if the player chooses fusion before opening the
+Compendium itself. Newly negotiated demons are registered when they are added
+to the party, so abandoning one before visiting the Cathedral does not remove
+its record.
 
 The enhancement does not enlarge or rewrite the game's save structure. Its
 registration flags reuse the high bit of an existing saved per-demon counter,
