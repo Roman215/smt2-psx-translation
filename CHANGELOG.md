@@ -13,12 +13,35 @@ your own verified source image.
 
 ## [Unreleased]
 
+### Changed
+
+- Expanded the demon-negotiation composition audit to follow hard-coded
+  bank-5 connective records and reject reachable A14 joins without authored
+  whitespace.
+- Extended the source-dump utility to generate a Japanese/English comparison
+  for executable-resident system strings.
+
 ### Fixed
 
 - Expanded the Demon Compendium's reused Devil Analysis sort tables from the
   stock 186 enemy-oriented candidates to all 254 registerable base-table
   demons, allowing fusion-only Elements such as Aquans and every other acquired
   demon to appear.
+- Reworded and separated reusable negotiation transitions so random follow-up
+  requests form natural English instead of running together.
+- Corrected the charm outcome message to name the affected party member rather
+  than the opposing demon.
+- Corrected several shop and status system strings whose English used the wrong
+  subject, named blades where the Japanese only said weapons, or otherwise
+  changed the original meaning.
+- Prevented the Demon Compendium's price refresh from treating the ordinary
+  Devil Analysis list object as text, restoring its "Analyze whom?" prompt.
+- Reused the stock level-gate rejection for overleveled Compendium summons so
+  it explains the failure and waits for acknowledgement before returning to
+  the Cathedral menu.
+- Reworked Hiruko's request and Lord Masakado's revival dialogue against the
+  Japanese so the connected story scene reads naturally without losing its
+  meaning or formal tone.
 
 ## [0.1.6] - 2026-07-22
 

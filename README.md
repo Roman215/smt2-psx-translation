@@ -161,7 +161,8 @@ push that no game data is tracked in the repository.
 - `tools/block_rebuild.py`, `build_en_tree.py`, `build_prod_exe.py`, `cdecc.py`,
   and `rdlogo.py` — codec and binary-patching support used by the build.
 - `tools/dump_full_script.py` — optional developer utility that dumps the
-  source dialogue directly from a supplied BIN.
+  source dialogue and executable-resident system strings directly from a
+  supplied BIN.
 - `tools/opening_movie.py` rebuilds the fixed-layout opening and game-over STRs
   with translated text.
 - `tools/compendium.py` installs the default Cathedral Compendium enhancement
@@ -175,7 +176,10 @@ To regenerate a Japanese source-script reference without extracting the disc:
 python tools/dump_full_script.py --input "Shin Megami Tensei II (Japan) (Rev 1).bin"
 ```
 
-It writes `SMT2_full_script.txt` containing the raw Japanese script.
+It writes `SMT2_full_script.txt` containing the raw Japanese script and
+`SMT2_system_strings.txt`, which places the original Japanese beside the
+current English for every raw executable string translated by
+`tools/sys_strings.py`.
 
 ## Legal
 

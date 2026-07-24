@@ -123,7 +123,7 @@ ITEMS = [
  # 208-254 consumables
  "Mazio Stone","Mabufu Stone","Maragi Stone","Spiral Bomb","Punch Gun","Poison Dish","Segaki Rice","Secret Needle",
  "Hama Arrow","Poison Arrow","Medicine","Jewel","Distone","Disparalyze","Dispoison","Recall Orb",
- "Amida Beads","React Sheet","Seal Bell","Saint's Flute","Hiranya","Magic Stone","Muscle Drinko","Soma",
+ "Amida Beads","React Sheet","Seal Bell","Saint's Flute","Hiranya","Magic Stone","Muscle Drink","Soma",
  "Elixir","Revive Incense","Luck Incense","Vitality Incense","Wisdom Incense","Str Incense","Speed Incense","Magic Incense",
  "Blue Scroll","Asura's Palm","Angel Hair","Buddha Statue","Rosary","Melt Orb","Hyper Drop","Core Shield",
  "Red Scroll","Balloon Shield","Mist Jar","Bronze Box","Survey Bell","Amulet","Metal Card",

@@ -63,8 +63,10 @@ CONDITIONAL_OPS = (
 )
 CONDITIONAL_WITH_BYTE_ARG = {0x2D, 0x2E, 0x4D}
 
-# These instructions display non-slot text.  A subsequent slot cannot be a
-# continuation of the earlier slot, so they terminate a composition chain.
+# These instructions interrupt slot composition.  Opcodes 0x13, 0x15, and
+# 0x6C carry an explicit bank-5 message ID and are handled separately below:
+# unlike the other fixed-message operations, those records can themselves be
+# connective text (the reported 0x5006 + 0x47D2 join is one such case).
 FIXED_MESSAGE_OPS = set(range(0x61, 0x6A)) | {0x6C}
 
 DYNAMIC_NAMES = {
@@ -98,6 +100,7 @@ class Instruction:
     successors: tuple[int, ...]
     kind: str = "logic"
     slot: int | None = None
+    message: int | None = None
     menu: tuple[tuple[int, int], ...] = ()
 
 
@@ -143,7 +146,10 @@ class NegotiationProgram:
             return Instruction(address, opcode, (address + 1, address + 2))
         if opcode in {0x13, 0x15}:
             operand = self.aligned_after(address)
-            return Instruction(address, opcode, (operand + 2,), "fixed_message")
+            return Instruction(
+                address, opcode, (operand + 2,), "fixed_message",
+                message=self.u16(operand),
+            )
         if opcode == 0x16:
             operand = self.aligned_after(address)
             return Instruction(
@@ -240,7 +246,10 @@ class NegotiationProgram:
             return Instruction(address, opcode, (address + 1,))
         if opcode == 0x6C:
             operand = self.aligned_after(address)
-            return Instruction(address, opcode, (operand + 2,), "fixed_message")
+            return Instruction(
+                address, opcode, (operand + 2,), "fixed_message",
+                message=self.u16(operand),
+            )
         if opcode == 0x6D:
             return Instruction(address, opcode, (address + 2,))
         if 0x6E <= opcode <= 0x73:
@@ -293,7 +302,9 @@ def render_translation(message: int) -> str:
                 result.append(DISPLAY_CONTROLS[token])
             elif token in DYNAMIC_NAMES:
                 result.append(DYNAMIC_NAMES[token])
-            elif token in IGNORED_CONTROLS or token.startswith("A") and token[1:].isalnum():
+            elif token in IGNORED_CONTROLS or re.fullmatch(
+                r"A[0-9A-Fa-f]{2}", token
+            ):
                 continue
             else:
                 result.append(token)
@@ -302,6 +313,23 @@ def render_translation(message: int) -> str:
         else:
             result.append(str(token))
     return re.sub(r"\s+", " ", "".join(result)).strip()
+
+
+def a14_connective_has_separator(message: int) -> bool:
+    """Require authored whitespace before a record's trailing A14 join."""
+    tokens = TRANS.get(message, ())
+    if not tokens or tokens[-1] != "A14":
+        return True
+    for token in reversed(tokens[:-1]):
+        if (
+            not isinstance(token, str)
+            or token in DYNAMIC_NAMES
+            or token in IGNORED_CONTROLS
+            or re.fullmatch(r"A[0-9A-Fa-f]{2}", token)
+        ):
+            continue
+        return token.endswith((" ", "\t", "\n"))
+    return False
 
 
 def load_japanese(path: Path) -> dict[int, str]:
@@ -436,8 +464,8 @@ class PromptMeasurer:
                     # custom-menu prompt. Retain a conservative eight-character
                     # bound if a future bytecode/script edit introduces one.
                     append_text("W" * 8)
-                elif token in IGNORED_CONTROLS or (
-                    token.startswith("A") and token[1:].isalnum()
+                elif token in IGNORED_CONTROLS or re.fullmatch(
+                    r"A[0-9A-Fa-f]{2}", token
                 ):
                     continue
                 else:
@@ -515,8 +543,69 @@ def collect_paths(
     return completed, yes_no, menus, adjacent, truncated
 
 
-def slots_for(graph: dict[int, Instruction], chain: tuple[int, ...]) -> tuple[int, ...]:
-    return tuple(graph[address].slot for address in chain)  # type: ignore[arg-type]
+def collect_fixed_adjacencies(
+    graph: dict[int, Instruction], entries: tuple[int, ...]
+) -> set[tuple[int, int]]:
+    """Find joins on either side of explicit bank-5 message operations.
+
+    Fixed messages can be connective records, but carrying every earlier
+    dialogue page through them would pollute prompt layout/wording checks.
+    Track only the nearest emitted record on each side, which captures the
+    physical cross-bank join without treating a whole exchange as one prompt.
+    """
+    adjacent = set()
+    queue = collections.deque((entry, None) for entry in entries)
+    seen = set()
+    while queue:
+        address, previous = queue.popleft()
+        state = (address, previous)
+        if state in seen:
+            continue
+        seen.add(state)
+        instruction = graph[address]
+        next_previous = previous
+        is_slot = instruction.kind == "emit"
+        is_explicit_fixed = (
+            instruction.kind == "fixed_message"
+            and instruction.message is not None
+        )
+        if is_slot or is_explicit_fixed:
+            if previous is not None and (
+                graph[previous].message is not None
+                or instruction.message is not None
+            ):
+                adjacent.add((previous, address))
+            next_previous = address
+        elif instruction.kind in {"yes_no", "menu", "terminal", "fixed_message"}:
+            next_previous = None
+
+        for successor in instruction.successors:
+            queue.append((successor, next_previous))
+    return adjacent
+
+
+def slots_for(
+    graph: dict[int, Instruction], chain: tuple[int, ...]
+) -> tuple[int | None, ...]:
+    return tuple(graph[address].slot for address in chain)
+
+
+def messages_for(
+    graph: dict[int, Instruction],
+    family: int,
+    variant: int,
+    chain: tuple[int, ...],
+) -> tuple[int, ...]:
+    messages = []
+    for address in chain:
+        instruction = graph[address]
+        if instruction.kind == "emit":
+            assert instruction.slot is not None
+            messages.append(message_id(family, variant, instruction.slot))
+        else:
+            assert instruction.message is not None
+            messages.append(instruction.message)
+    return tuple(messages)
 
 
 def write_tsv(
@@ -533,17 +622,21 @@ def write_tsv(
         completed, yes_no, menus, adjacent, truncated = collect_paths(
             graph, program.family_entries(family)
         )
+        fixed_adjacencies = collect_fixed_adjacencies(
+            graph, program.family_entries(family)
+        )
         totals["nodes"] += len(graph)
         totals["chains"] += len(completed)
         totals["yes_no"] += len(yes_no)
         totals["menus"] += len(menus)
         totals["adjacent"] += len(adjacent)
+        totals["fixed_adjacencies"] += len(fixed_adjacencies)
         totals["truncated"] += len(truncated)
         totals["repeat_loops"] += sum(first == second for first, second in adjacent)
         for variant in range(VARIANT_COUNTS[family]):
             def add_row(kind, address, chain, labels: tuple[int, ...] = ()):
                 slots = slots_for(graph, chain)
-                messages = tuple(message_id(family, variant, slot) for slot in slots)
+                messages = messages_for(graph, family, variant, chain)
                 fragments = tuple(render_translation(message) for message in messages)
                 english = " + ".join(fragments)
                 source = " + ".join(japanese.get(message, "") for message in messages)
@@ -565,7 +658,10 @@ def write_tsv(
                     "family": family,
                     "variant": variant,
                     "script_address": f"0x{address:08x}" if address is not None else "",
-                    "slot_sequence": " ".join(f"{slot:02x}" for slot in slots),
+                    "slot_sequence": " ".join(
+                        f"{slot:02x}" if slot is not None else "--"
+                        for slot in slots
+                    ),
                     "message_ids": " ".join(f"{message:04x}" for message in messages),
                     "menu_indices": " ".join(str(label) for label in labels),
                     "menu_labels": label_text,
@@ -573,6 +669,12 @@ def write_tsv(
                     "yes_no_review": (
                         "OK"
                         if kind != "yes_no" or yes_no_natural(fragments[-1])
+                        else "CHECK"
+                    ),
+                    "a14_join_review": (
+                        "OK"
+                        if kind not in {"adjacent_pair", "fixed_adjacent_pair"}
+                        or a14_connective_has_separator(messages[0])
                         else "CHECK"
                     ),
                     **layout,
@@ -597,6 +699,8 @@ def write_tsv(
                     add_row(
                         "repeatable_fragment", first, (first,),
                     )
+            for first, second in sorted(fixed_adjacencies):
+                add_row("fixed_adjacent_pair", None, (first, second))
 
     rows.sort(key=lambda row: (
         row["kind"], row["family"], row["variant"], row["message_ids"],
@@ -720,6 +824,12 @@ def write_markdown(
     overlong_menu_rows = [
         row for row in menu_rows if row["layout_review"] == "CHECK"
     ]
+    unsafe_a14_joins = {
+        int(str(row["message_ids"]).split()[0], 16): row
+        for row in rows
+        if row["kind"] in {"adjacent_pair", "fixed_adjacent_pair"}
+        and row["a14_join_review"] == "CHECK"
+    }
 
     examples = {}
     for row in rows:
@@ -744,16 +854,23 @@ def write_markdown(
         "",
         f"- {totals['nodes']} family-specific reachable bytecode nodes",
         f"- {totals['adjacent']} family-specific fragment adjacencies",
+        (
+            f"- {totals['fixed_adjacencies']} adjacencies involving explicit "
+            "bank-5 message records"
+        ),
         f"- {totals['chains']} completed fragment chains",
         f"- {totals['yes_no']} family-specific binary Yes/No prompt sites",
         f"- {totals['menus']} custom response-menu sites",
         f"- {totals['repeat_loops']} family-specific unbounded fragment loop",
         f"- {totals['truncated']} loop exit states reached the eight-repeat display cap",
+        f"- {len(unsafe_a14_joins)} unsafe A14 connective joins",
         "",
         "The TSV is the complete reference. `fragment_sequence` rows show maximal slot",
         "chains between message/choice boundaries; `adjacent_pair` rows are the compact",
-        "control-flow graph of every possible join. The same slot maps to different message",
-        "IDs for each speech family and variant.",
+        "control-flow graph of their possible joins. `fixed_adjacent_pair` rows add the",
+        "nearest joins on either side of explicit bank-5 message records embedded in the",
+        "bytecode. The same slot maps to different message IDs for each speech family",
+        "and variant.",
         "",
         "An unbounded loop cannot be enumerated as a finite list. It is represented",
         "symbolically by `repeatable_fragment` plus its incoming/outgoing `adjacent_pair`",
@@ -781,6 +898,32 @@ def write_markdown(
             )
     else:
         lines.append("- No reachable `42b1` adjacency was found.")
+
+    fixed_examples = {}
+    for row in rows:
+        if (
+            row["kind"] == "fixed_adjacent_pair"
+            and "5006" in str(row["message_ids"]).lower()
+        ):
+            fixed_examples.setdefault((row["message_ids"], row["english"]), row)
+    lines += [
+        "",
+        "## Cross-bank connective join",
+        "",
+    ]
+    if fixed_examples:
+        for row in list(fixed_examples.values())[:8]:
+            lines.append(f"- `{row['message_ids']}`: {row['english']}")
+    else:
+        lines.append("- No reachable `5006` adjacency was found.")
+    if unsafe_a14_joins:
+        lines += [
+            "",
+            "### A14 joins missing authored whitespace",
+            "",
+        ]
+        for message, row in sorted(unsafe_a14_joins.items()):
+            lines.append(f"- `{message:04x}`: {row['english']}")
 
     lines += [
         "",
@@ -903,6 +1046,18 @@ def main() -> None:
     print(f"wrote {menu_row_count} menu rows to {args.menus_tsv}")
     print(f"wrote {choice_row_count} choice-use rows to {args.choice_uses_tsv}")
     print(f"wrote summary to {args.markdown}")
+    unsafe_a14_joins = sorted({
+        str(row["message_ids"]).split()[0]
+        for row in rows
+        if row["kind"] in {"adjacent_pair", "fixed_adjacent_pair"}
+        and row["a14_join_review"] == "CHECK"
+    })
+    if unsafe_a14_joins:
+        print(
+            "unsafe A14 connective joins: " + ", ".join(unsafe_a14_joins),
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":

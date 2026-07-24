@@ -426,7 +426,7 @@ ASCII_FIT_ENGLISH = {
     0x1894: "Magic cannot be used now.",
     0x18d8: "Curse prevents removal!",
     0x18f4: "No usable magic available.",
-    0x191c: "Cannot summon this alignment.",
+    0x191c: "Wrong alignment. Can't summon.",
     0x193c: "No items can be reordered.",
     0x1974: "Demon cannot leave.",
     0x19c8: "Cannot use that here.",
@@ -541,7 +541,7 @@ AUDITED_SYSTEM_TEXT = {
 
     # Healing interfaces. Leading spaces complete a dynamically printed name.
     0x5410: "Cost",
-    0x546c: " was uncursed!",
+    0x546c: "'s curse is gone!",
     0x5480: " was revived!",
     0x5490: " recovered HP and MP!",
     0x54ac: " was cured!",
@@ -570,7 +570,7 @@ AUDITED_SYSTEM_TEXT = {
     0x569c: "You can't carry more.",
     0x56b4: "That's the total. Okay?",
     0x56d0: "How many?",
-    0x56e4: "We sell recovery items, too!",
+    0x56e4: "For healing, try items too!",
     0x5708: "Choose:",
 
     0x571c: "You're short on cash.",
@@ -581,7 +581,7 @@ AUDITED_SYSTEM_TEXT = {
     0x5790: "Which one, then?",
 
     0x57a8: "Not enough.",
-    0x57b8: "I've no more to sell.",
+    0x57b8: "You can't carry more.",
     0x57d0: "Come back if you want more.",
     0x57f0: "Which one?",
 
@@ -622,7 +622,7 @@ AUDITED_SYSTEM_TEXT = {
     0x5b44: "Got something to sell?",
     0x5b60: "Nothing I can buy. Bring me something good next time.",
     0x5b9c: "All fine weapons here.",
-    0x5bb4: "Weapon Shop: Welcome.",
+    0x5bb4: "Weapon Shop: Good gear",
 
     0x5bcc: "Can't equip it. Still purchase?",
     0x5bf0: "You are in no state to shop.",
@@ -636,7 +636,8 @@ AUDITED_SYSTEM_TEXT = {
     0x5cd0: "What would you like to sell?",
     0x5cf0: "I cannot buy any of that. Bring me other goods.",
     0x5d24: "What would you like?",
-    0x5d3c: "Armor Shop: We stop any attack!",
+    # 防具屋 is the speaker label; the gear, not the shopkeeper, stops attacks.
+    0x5d3c: "Armor Shop: Gear stops any attack!",
 
     0x5d60: "You can't equip it. Is that okay?",
     0x5d84: "You can't shop right now.",
@@ -647,7 +648,8 @@ AUDITED_SYSTEM_TEXT = {
     0x5e2c: "Thank you. Please come again.",
     0x5e50: "Which item will you sell me?",
     0x5e70: "What will you buy?",
-    0x5e84: "Weapon Shop: Finest blades here.",
+    # 武器 is generic and includes guns; 業物 must not become blade-specific here.
+    0x5e84: "Weapon Shop: Finest weapons here.",
 
     0x5ea8: "Y-You can't carry that much cash.",
     0x5ecc: "Y-You need more cash.",
@@ -670,7 +672,7 @@ AUDITED_SYSTEM_TEXT = {
     0x60c4: "How many?",
     0x60d0: "Much obliged.",
     0x60e4: "Sell what?",
-    0x60f0: "Nothing I can buy. Bring better goods.",
+    0x60f0: "Nothing I can buy. Bring me goods.",
     0x6118: "Buy what?",
     0x6128: "Armor Shop: Welcome.",
 
@@ -678,7 +680,7 @@ AUDITED_SYSTEM_TEXT = {
     0x6160: "You need more cash.",
     0x617c: "Inventory is full.",
     0x6194: "Equip it right away?",
-    0x61ac: "Buy it?",
+    0x61ac: " Is that OK?",
     0x61c8: "How many?",
     0x61dc: "Thank you very much.",
     0x61f4: "What will you sell?",
@@ -696,7 +698,7 @@ AUDITED_SYSTEM_TEXT = {
     0x6330: "How many?",
     0x6344: "Thanks.",
     0x6350: "What are you selling me?",
-    0x636c: "Nothing I can buy. Bring useful goods.",
+    0x636c: "Nothing I can buy. Bring me goods.",
     0x6394: "What will you buy?",
     0x63a8: "Junk Shop: Need something?",
 
@@ -724,7 +726,7 @@ AUDITED_SYSTEM_TEXT = {
     0x6610: "How many?",
     0x6624: "Thanks. Come again.",
     0x663c: "Anything to sell me?",
-    0x6658: "Nothing I can buy. Bring me something worthwhile.",
+    0x6658: "Nothing I can buy. Please bring me something.",
     0x6694: "What will you buy?",
     0x66a8: "Weapon Shop: Welcome.",
     0x66cc: "OWN",                        # αβγ aliases render as 所持数 (quantity owned)

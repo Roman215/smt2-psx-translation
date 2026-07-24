@@ -2708,13 +2708,6 @@ def main(argv=None):
     args = parser.parse_args(argv)
     _validate_cave_layouts()
     enhancements = not args.no_enhancements
-    enhancement_translation_restore = None
-    if enhancements:
-        # This happens before dictionary mining and bank construction so the
-        # enhanced build's neutral summoning-rejection text is encoded like
-        # every other authored message. The no-enhancements build is
-        # unaffected.
-        enhancement_translation_restore = COMP.prepare_translations(TR.TRANS)
     pyxdelta = require_pyxdelta() if args.xdelta else None
     output_dir = Path(args.output_dir).expanduser()
     if output_dir.exists() and not output_dir.is_dir():
@@ -2816,8 +2809,6 @@ def main(argv=None):
     NE.apply_end_button(exe)                 # END button on the Z/z row; no empty-row scrolling
     print("[6/7] applying dialogue + menu banks...")
     packa = apply_banks(exe, packa0, slpm, PATHS)
-    if enhancement_translation_restore is not None:
-        COMP.restore_translations(TR.TRANS, enhancement_translation_restore)
     STATUS.patch_status_texture(packa, exe)
     NE.patch_atlas(packa, slpm)              # naming-grid atlas texture -> English glyphs
     print("[7/7] writing patched BIN...")

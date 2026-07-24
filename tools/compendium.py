@@ -64,6 +64,9 @@ DYNAMIC_PROMPT = EXTRA_CAVE + 68
 # cannot be displayed while the compendium browser is running, and the exit
 # path restores the original bytes.
 PROMPT_SLOT = EXE_BASE + 0x1848
+# Ordinary Devil Analysis uses the neighboring dedicated prompt instead. It
+# must remain untouched and render as "Analyze whom?" outside the Compendium.
+ANALYSIS_PROMPT_SLOT = EXE_BASE + 0x182C
 
 # The Cathedral has a three-entry menu early in the game and switches to a
 # six-entry form once the additional fusion modes are unlocked.
@@ -155,24 +158,6 @@ CATHEDRAL_DIALOGUE_UPDATE_CALL = 0x80041264
 LEGACY_LOWER_SORT_RENDER = 0x80043964
 PROMPT_RENDER_CALL = 0x80030E6C
 PROMPT_RENDER = 0x8002F124
-
-
-def prepare_translations(translations):
-    """Make the stock summoning rejection valid for every enhanced check.
-
-    The Compendium reuses message 0x0008 for both the original alignment
-    restriction and its protagonist-level restriction.  Keep the
-    no-enhancements translation build untouched, but use a neutral explanation
-    in the default enhanced build so both situations read correctly.
-    """
-    previous = translations[0x0008]
-    translations[0x0008] = ["That demon can't be summoned.", "ED"]
-    return previous
-
-
-def restore_translations(translations, previous):
-    """Undo :func:`prepare_translations` for in-process build callers."""
-    translations[0x0008] = previous
 
 
 def _foff(address):
@@ -577,15 +562,22 @@ def _emit_code():
 
     # This stock call runs at the end of Devil Analysis' own list-update task,
     # after it has recomputed +0x8e from the scroll offset and visible cursor.
-    # Preserve its list-object argument and caller return address, refresh the
-    # prompt, then tail-call the displaced stock state test so its return value
-    # reaches the original caller unchanged.
+    # Preserve its list-object argument and caller return address. Refresh the
+    # price only for the Compendium: in ordinary Analysis, a0 is the list
+    # object, not a text pointer, and sending it through PROMPT_RENDER produces
+    # the dot/circle garbage seen in state9. Then tail-call the displaced stock
+    # state test so its return value reaches the original caller unchanged.
     a.label("price_update")
     a.addiu("sp", "sp", -8)
     a.sw("ra", 4, "sp")
+    a.lui("t0", 0x800D)
+    a.lw("t1", FLAG & 0xFFFF, "t0")
+    a.addiu("t2", "zero", 2)
+    a.bne("t1", "t2", "price_update_restore")
     a.sw("a0", 0, "sp")
     a.jal(DYNAMIC_PROMPT)
     a.nop()
+    a.label("price_update_restore")
     a.lw("a0", 0, "sp")
     a.lw("ra", 4, "sp")
     a.j(0x8004BD34)
@@ -831,7 +823,11 @@ def _emit_code():
     a.label("purchase_level")
     a.j(0)
     purchase_done_jumps.append(len(a.items) - 1)
-    a.addiu("t1", "zero", 8)
+    # Message 0x005b is the stock level-gate rejection ("A pity... You lack
+    # the skill to command it.") and, unlike 0x0008, includes WT before ED.
+    # Reusing it both states the real reason and lets the player acknowledge
+    # the result before the Cathedral prompt is replayed.
+    a.addiu("t1", "zero", 0x5B)
     a.label("purchase_full")
     a.j(0)
     purchase_done_jumps.append(len(a.items) - 1)
@@ -1053,6 +1049,10 @@ def apply(exe, demon_names=None):
         raise SystemExit("compendium: dynamic price field supports demon levels through 99")
 
     prompt = b"\x1fSummon Cost:        Macca\x00\x00"
+    _expect(
+        exe, ANALYSIS_PROMPT_SLOT, b"\x1fAnalyze whom?\x00",
+        "translated Devil Analysis prompt",
+    )
     _expect(
         exe, PROMPT_SLOT, b"\x1fUse it on whom?\x00",
         "translated item-target prompt",

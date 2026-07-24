@@ -1,8 +1,9 @@
-"""Dump every compressed text-bank entry from a supported SMT2 Japan Rev 1 BIN.
+"""Dump compressed and executable-resident text from an SMT2 Japan Rev 1 BIN.
 
 Banks 0-3 contain the field, NPC, and story script. Banks 4-7 contain negotiation,
-battle, and shared system text. Raw strings owned by standalone overlays (for example,
-RDLOGO.BIN) are outside this codec and are intentionally not part of this dump.
+battle, and shared system text. A second output pairs each translated raw system-string
+slot in SLPM_869.24 with its original Japanese and current English. Raw strings owned
+by standalone overlays (for example, RDLOGO.BIN) remain outside these dumps.
 """
 
 import argparse
@@ -10,6 +11,8 @@ import hashlib
 import struct
 import sys
 from pathlib import Path
+
+from sys_strings import AUDITED_SYSTEM_TEXT, FULLWIDTH_SYSTEM_TEXT, SYS
 
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
@@ -206,6 +209,38 @@ def decode_bank(bank, desc, buf, base, allocation, table, slpm):
     return messages, aliases, unterminated
 
 
+def write_system_dump(path, slpm):
+    """Write original Japanese beside every mapped raw system-string translation."""
+    lines = [
+        "# Shin Megami Tensei II (PSX) — executable system-string reference",
+        "# Offsets are relative to SLPM_869.24. This covers every player-facing raw",
+        "# executable string translated by tools/sys_strings.py; compressed banks are",
+        "# listed separately in SMT2_full_script.txt.",
+        "# offset\tslot_bytes\tencoding\tjapanese\tcurrent_english",
+    ]
+    offsets = sorted(set(SYS) | set(AUDITED_SYSTEM_TEXT))
+    for offset in offsets:
+        end = slpm.index(0, offset)
+        if offset in SYS:
+            slot_bytes, english = SYS[offset]
+        else:
+            english = AUDITED_SYSTEM_TEXT[offset]
+            slot_bytes = ((end - offset + 1 + 3) // 4) * 4
+        japanese = slpm[offset:end].decode("cp932")
+        encoding = (
+            "fullwidth-sjis"
+            if offset in FULLWIDTH_SYSTEM_TEXT
+            else "marker-ascii"
+        )
+        lines.append(
+            f"{offset:#06x}\t{slot_bytes}\t{encoding}\t{japanese}\t{english}"
+        )
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return len(offsets)
+
+
 def parse_args(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -213,6 +248,12 @@ def parse_args(argv=None):
     )
     parser.add_argument(
         "--output", default="SMT2_full_script.txt", metavar="PATH", help="output text file"
+    )
+    parser.add_argument(
+        "--system-output",
+        default="SMT2_system_strings.txt",
+        metavar="PATH",
+        help="raw executable system-string comparison output",
     )
     return parser.parse_args(argv)
 
@@ -282,6 +323,12 @@ def main(argv=None):
     if unterminated:
         ids = ", ".join(f"{message_id:#06x}" for message_id in unterminated)
         print(f"Note: C/D entries without ED (bounded by their next stream): {ids}")
+    system_output_path = Path(args.system_output)
+    system_count = write_system_dump(system_output_path, slpm)
+    print(
+        f"{system_count} executable system strings -> {system_output_path} "
+        f"({system_output_path.stat().st_size}B)"
+    )
 
 
 if __name__ == "__main__":

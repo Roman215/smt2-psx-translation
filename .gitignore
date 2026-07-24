@@ -10,3 +10,4 @@ Extracted/
 __pycache__/
 build/
 SMT2_full_script.txt
+SMT2_system_strings.txt
