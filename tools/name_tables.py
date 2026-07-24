@@ -28,7 +28,7 @@ DEMONS = [
  "Cthulhu","Pazuzu","Nyarlathotep","Tezcatlipoca","Naragiri","Hraesvelgr","Anzu","Gurr","Furiae",
  "Chon Chon","Medusa","Rabbi","Golem","Junk","Iron Maiden","Crazy Dummy","Police","Jaws","Hecatonchires",
  "Girimehkala","Ekimmu","Cyclops","Rakshasa","Ogre","Wendigo","Gremlin","Behemoth","Manticore","Scylla",
- "Black Widow","Gyu-Ki","Nue","Bicorn","Garm","Yggdrasil","Alraune","Mandrake","Audrey","Corpse",
+ "Black Widow","Gyu-Ki","Nue","Bicorn","Garm","Yggdrasil","Alraune","Mandrake","Audrey","Corpses",
  "Zombie Priest","Workaholic","Bodyconian","Zombie","Zombie Dog","Lucifer","Beelzebub","Mara","Bael",
  "Astaroth","Loki","Hecate","Tiamat","Kingu","Nidhoggr","Tarasque","Wyvern","Worm","Vetara","Yaka",
  "Man Eater","Ghoulette","Ghoul","Preta","Legion","Inferno","Depth","Hanged Man","Poltergeist","Old One",
@@ -41,13 +41,13 @@ DEMONS = [
  "Sage of Time","Hell's Angel","Matador","Gabriel","Gomory",
 ]
 
-# ---- RACES: name-type 11, base 0x801043f8, 42 entries (game order -> Atlus race) ----
+# ---- RACES: name-type 11, base 0x801043f8, 44 entries (game order -> Atlus race) ----
 RACES = [
  "Godly","Herald","Amatsu","Avian","Megami","Deity","Avatar","Holy","Element","Fury",
  "Dragon","Lady","Kunitsu","Divine","Flight","Messian","Drake","Yoma","Beast","Night",
  "Jirae","Fairy","Demonoid","Fallen","Brute","Femme","Gaean","Vile","Raptor","Machine",
  "Vaccine","Jaki","Wilder","Wood","Undead","Tyrant","Snake","Haunt","Spirit","Foul",
- "Virus","Fiend",
+ "Virus","Warrior","Divine General","Fiend",
 ]
 
 # ---- SPELLS/SKILLS: type 7(+8), base 0x80113486, 321 entries (0-159 names, 160-320 descriptions) ----

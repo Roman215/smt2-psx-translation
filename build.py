@@ -1570,8 +1570,9 @@ _CATHEDRAL_RACE_BOUNDARIES = (
     246, 252, 255,
 )
 # High-byte demon IDs use this race map, indexed by their low byte.  It is the
-# table at 0x801fbf58 in the loaded fusion module; entries 42/43 are sentinels
-# rather than printable races.  Low byte 0 corresponds to DEMONS[256].
+# table at 0x801fbf58 in the loaded fusion module.  IDs 42/43 are the valid
+# Divine General/Fiend races, but those special demons are not fusion-list
+# candidates.  Low byte 0 corresponds to DEMONS[256].
 _CATHEDRAL_SPECIAL_RACES = (
     41, 17, 36, 35, 22, 23, 41, 17, 41, 41, 23, 12, 41, 35,
     41, 1, 1, 1, 0, 35, 5, 17, 35, 35,
@@ -1618,6 +1619,8 @@ _COMPACT_RACE_PRIMARY_PTRS = (
     0x80011ff8, 0x80011ff0, 0x80011fe8, 0x80011fe0, 0x80011fd8, 0x80011fd0,
     0x80011fc8, 0x80011fc0, 0x80011fb8, 0x80011fb0, 0x80011fa4, 0x80011f9c,
 )
+_FULL_RACE_COUNT = 44
+_COMPACT_RACE_COUNT = len(_COMPACT_RACE_PRIMARY_PTRS)
 
 
 def _validate_spell_description_widths(widths):
@@ -1652,13 +1655,20 @@ def _patch_compact_race_labels(exe):
     These screens do not use the rebuildable RACES table at 0x801043f8.  They
     instead select from two executable-resident pointer tables; the second
     table substitutes five shorter Japanese aliases.  Repack the pool with
-    the same Atlus race names as NT.RACES and point both tables at them.
+    the first 42 Atlus race names and point both tables at them.  The separate
+    compressed table has two additional special-only races: Divine General
+    and Fiend.
     """
-    if len(NT.RACES) != len(_COMPACT_RACE_PRIMARY_PTRS):
+    if len(NT.RACES) != _FULL_RACE_COUNT:
         raise RuntimeError(
-            "Compact race table count no longer matches NT.RACES: "
-            f"{len(_COMPACT_RACE_PRIMARY_PTRS)} != {len(NT.RACES)}"
+            "Full race table count no longer matches the stock executable: "
+            f"{len(NT.RACES)} != {_FULL_RACE_COUNT}"
         )
+    if tuple(NT.RACES[41:]) != ("Warrior", "Divine General", "Fiend"):
+        raise RuntimeError(
+            "Race IDs 41..43 must remain Warrior, Divine General, and Fiend"
+        )
+    compact_races = NT.RACES[:_COMPACT_RACE_COUNT]
 
     expected_secondary = list(_COMPACT_RACE_PRIMARY_PTRS)
     expected_secondary[15] = 0x80012120  # Messian: shorter Japanese alias
@@ -1678,7 +1688,7 @@ def _patch_compact_race_labels(exe):
 
     pool = bytearray()
     pointers = []
-    for name in NT.RACES:
+    for name in compact_races:
         pointers.append(_COMPACT_RACE_POOL_START + len(pool))
         pool += bytes([SS.ASCII_MARKER]) + name.encode("ascii") + b"\0"
 
@@ -1748,8 +1758,10 @@ def _patch_cathedral_columns(exe, widths10):
     def text_width(text):
         return sum(widths10.get(sidx(ET.fullwidth(char)), 10) for char in text)
 
-    if len(NT.DEMONS) < 255 or len(NT.RACES) != 42:
-        raise RuntimeError("Cathedral width audit requires 255 demons and 42 races")
+    if len(NT.DEMONS) < 255 or len(NT.RACES) != _FULL_RACE_COUNT:
+        raise RuntimeError(
+            "Cathedral width audit requires 255 demons and 44 races"
+        )
 
     pairs = []
     for demon_id, demon in enumerate(NT.DEMONS[:255]):
@@ -1759,7 +1771,9 @@ def _patch_cathedral_columns(exe, widths10):
         pairs.append((width, demon_id, race, demon))
     for low_id, race_id in enumerate(_CATHEDRAL_SPECIAL_RACES):
         demon_index = 256 + low_id
-        if demon_index >= len(NT.DEMONS) or race_id >= len(NT.RACES):
+        # Divine Generals and Fiends have valid global race IDs (42/43), but
+        # these special demons are not printable candidates on fusion lists.
+        if demon_index >= len(NT.DEMONS) or race_id >= _COMPACT_RACE_COUNT:
             continue
         demon = NT.DEMONS[demon_index]
         race = NT.RACES[race_id]
@@ -1767,7 +1781,7 @@ def _patch_cathedral_columns(exe, widths10):
         pairs.append((width, 0x100 + low_id, race, demon))
 
     widest, demon_id, race, demon = max(pairs)
-    widest_race = max(map(text_width, NT.RACES))
+    widest_race = max(map(text_width, NT.RACES[:_COMPACT_RACE_COUNT]))
     widest_demon = max(map(text_width, NT.DEMONS))
     first_race_capacity = _CATHEDRAL_FIRST_NAME_X - \
                           _CATHEDRAL_PAIR_GAP - _CATHEDRAL_SOURCE_X
@@ -1946,7 +1960,7 @@ def _patch_cathedral_grid_symbols(exe):
 def apply_name_tables(exe, slpm, PATHS, widths10):
     # single-level [N u16 offsets][data]: (base, list, alloc_end)
     NT.rebuild_single(exe, 0x80102962, NT.DEMONS,    0x801034da, PATHS)  # demons  (311)
-    NT.rebuild_single(exe, 0x801043f8, NT.RACES,     0x8010452c, PATHS)  # races   (42)
+    NT.rebuild_single(exe, 0x801043f8, NT.RACES,     0x8010452c, PATHS)  # races   (44)
     NT.rebuild_single(exe, 0x801119f2, NT.NPCS,      0x80111ad8, PATHS)  # NPCs (23); TRUE end is
     # 0x80111ad8 (8-byte battle-data records follow) -- NOT 0x801132f2 (LOCATIONS). Overflowing
     # past here corrupts demon/battle data (unwinnable early fights).

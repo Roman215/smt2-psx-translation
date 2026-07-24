@@ -28,7 +28,9 @@ SYM_TAIL_RESERVE=0x39c
 # map-name block at 0x80016124 was considered and rejected: it contains live
 # sub-structures (a pointer table at 0x8001628c and 18 code reads of 0x800162c8).
 DICT_WEIGHT_MULT = 1.5                 # dict-vs-char Huffman weight balance
-NAME_CORPUS_WEIGHT = 8                 # extra weight for name/menu-table chars (char-only consumers)
+# The complete 44-entry race table needs this weighting to remain inside its
+# stock fixed-size block; the same weighting adds headroom to other name tables.
+NAME_CORPUS_WEIGHT = 12
 DICT_CODE_BASE = 0x8540
 DICT_JT_INDEX = 6
 DICT_BASE  = 0x800d8880                # bank 7's allocation ends here

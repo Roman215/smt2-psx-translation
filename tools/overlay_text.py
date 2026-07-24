@@ -167,10 +167,11 @@ def patch_casino3(source):
 def patch_omake(source):
     """Translate the private race/demon lists used by the bonus viewer."""
     buf = bytearray(source)
-    # This viewer omits Godly, Avatar, Element, and Fiend from its race list.
+    # This viewer stops at Virus and also omits Godly, Avatar, and Element.
+    # Warrior, Divine General, and Fiend are absent from its private list.
     races = [
         race for index, race in enumerate(NT.RACES)
-        if index not in {0, 6, 8, 41}
+        if index not in {0, 6, 8, 41, 42, 43}
     ]
     races.reverse()
     slots = _aligned_slots(buf, 0x000, len(races), 0x144, label="OMAKE.BIN races")

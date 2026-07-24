@@ -13,6 +13,12 @@ your own verified source image.
 
 ## [Unreleased]
 
+### Fixed
+
+- Restored the omitted Warrior and Divine General race-table entries so
+  special Fiends such as Alice resolve race ID 43 as "Fiend" instead of
+  decoding adjacent compressed data as garbage.
+
 ## [0.1.7] - 2026-07-23
 
 This release focuses on reliability and presentation fixes found after 0.1.6,
