@@ -42,6 +42,9 @@ your own verified source image.
 - Reworked Hiruko's request and Lord Masakado's revival dialogue against the
   Japanese so the connected story scene reads naturally without losing its
   meaning or formal tone.
+- Restored Skull Gi's "Repel Phys" shop affinity by translating its complete
+  shared-suffix string, and audited all 16 armor affinity labels and pointer
+  targets against the Japanese.
 
 ## [0.1.6] - 2026-07-22
 

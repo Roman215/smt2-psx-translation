@@ -221,10 +221,13 @@ SYS = {
     # Armor 相性 values. This is damage affinity/resistance, distinct from
     # the 属性 equip-alignment row whose values are ALL/L/N/C. Each entry is
     # kept in its original fixed slot and within the equipment detail pane.
-    0x2fc0: (8,  "Phys"),                  # 物理
+    # The original 0x2fb8 "Repel Phys" entry shares its final 物理 glyphs with
+    # a suffix at 0x2fc0. Translating that suffix independently creates a mixed
+    # SJIS/marker-ASCII stream. Translate only the complete pointer target.
+    0x2fb8: (16, "Repel Phys"),            # 反物理
     0x2fc8: (16, "Repel Mind"),            # 反精神
-    0x2fd8: (16, "Fire/Ice"),              # 対火炎・氷結
-    0x2fe8: (16, "Elec/Force"),            # 対電撃・衝撃
+    0x2fd8: (16, "Res Fire/Ice"),          # 対火炎・氷結
+    0x2fe8: (16, "Res Elec/Force"),        # 対電撃・衝撃
     0x2ff8: (16, "Res Phys"),              # 対物理
     0x3008: (16, "Res Mind"),              # 対精神
     0x3018: (16, "Res Force"),             # 対衝撃
@@ -760,6 +763,30 @@ AUDITED_SYSTEM_TEXT = {
 }
 
 
+# Armor record byte +3 indexes this executable pointer table. Keep the English
+# in pointer order so the build can verify all 16 profiles semantically and
+# catch missing or overlapping translations.
+_EQUIPMENT_AFFINITY_POINTER_TABLE = 0xE8220
+_EQUIPMENT_AFFINITY_TEXT = (
+    (0x3058, "Normal"),         # ノーマル
+    (0x3048, "Res Fire"),       # 対火炎
+    (0x3038, "Res Ice"),        # 対氷結
+    (0x3028, "Res Elec"),       # 対電撃
+    (0x3018, "Res Force"),      # 対衝撃
+    (0x3008, "Res Mind"),       # 対精神
+    (0x2ff8, "Res Phys"),       # 対物理
+    (0x2fe8, "Res Elec/Force"), # 対電撃・衝撃
+    (0x2fd8, "Res Fire/Ice"),   # 対火炎・氷結
+    (0x2fc8, "Repel Mind"),     # 反精神
+    (0x2fb8, "Repel Phys"),     # 反物理
+    (0x2fa8, "Drain Fire"),     # 吸火炎
+    (0x2f98, "Drain Elec"),     # 吸電撃
+    (0x2f88, "Demon Armor"),    # 魔性防具
+    (0x2f78, "Holy Armor"),     # 神聖防具
+    (0x2f68, "All Types"),      # 全対応
+)
+
+
 # Save-file LIST entries are sprintf format strings that begin with the JP game title
 # 真・女神転生２ (7 fullwidth chars = 14 bytes) followed by ` ＱＵＩＴ/ＦＩＬＥ%s ...ＬＶ%s%s`.
 # We swap ONLY the title -> fullwidth "SMT2", preserving the whole %s/spacing tail exactly.
@@ -812,6 +839,24 @@ def apply_sys(exe):
                 raise SystemExit(f"sys audit: 0x{off:x} is not fullwidth English")
         elif exe[off] != ASCII_MARKER:
             raise SystemExit(f"sys audit: 0x{off:x} is not marker-prefixed English")
+
+    for index, (target_off, english) in enumerate(_EQUIPMENT_AFFINITY_TEXT):
+        pointer = struct.unpack_from(
+            "<I", exe, _EQUIPMENT_AFFINITY_POINTER_TABLE + index * 4
+        )[0]
+        expected_pointer = 0x8000F800 + target_off
+        if pointer != expected_pointer:
+            raise SystemExit(
+                f"equipment affinity {index}: pointer {pointer:#x} != "
+                f"{expected_pointer:#x}"
+            )
+        expected = _ascii(english)
+        actual = bytes(exe[target_off:target_off + len(expected)])
+        if actual != expected:
+            raise SystemExit(
+                f"equipment affinity {index} at 0x{target_off:x} is not "
+                "intact marker-prefixed English"
+            )
 
 
 # The demon-dismissal and item-discard confirmations are composed by dedicated
