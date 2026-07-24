@@ -1639,6 +1639,10 @@ TRANS = {
     0x2005:["1",'ED'],
     0x2006:["10",'ED'],
     0x2007:["0 for one ",'CR','ED'],
+    # The cashier dynamically inserts Dark/Gold between 0x2004/0x2007/0x200a
+    # when explaining the exchange rate, and between 0x2016/0x2017 when
+    # reporting the player's balance. Keep the trailing space usable by both
+    # stock fragment sequences.
     0x2008:["Dark ",'ED'],
     0x2009:["Gold ",'ED'],
     0x200a:["Coin.",'WT',"Win enough Coins and you can",'CR',"trade them for fabulous prizes!",'WT',
@@ -1655,8 +1659,8 @@ TRANS = {
     0x2013:['PG',"Trade Coins for a prize?",'WT',"Which one would you like?",'ED'],
     0x2014:['PG',"You don't have enough Coins.",'WT','ED'],
     0x2015:['PG',"You can't carry any more items.",'WT','ED'],
-    0x2016:['PG',"You currently have",'ED'],
-    0x2017:[" ",'KO'," Coins.",'CR',"Come again!",'WT','ED'],
+    0x2016:['PG',"Your ",'ED'],
+    0x2017:["Coin balance is ",'KO',".",'CR',"Come again!",'WT','ED'],
     0x2018:["Bunny: Welcome to a dazzling",'CR',"world of chance! This slot machine",'CR',
       "is a little tricky!",'WT','ED'],
     0x2019:['PG',"What would you like to do?",'ED'],

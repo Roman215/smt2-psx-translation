@@ -217,25 +217,6 @@ SYS = {
     0x1e20: (8, "Bdy"),                   # 胴防具
     0x1e28: (8, "Swd"),                   # 合体剣 (fusion sword)
 
-    # ===================== EQUIPMENT AFFINITIES =====================
-    # Armor 相性 values. This is damage affinity/resistance, distinct from
-    # the 属性 equip-alignment row whose values are ALL/L/N/C. Each entry is
-    # kept in its original fixed slot and within the equipment detail pane.
-    # The original 0x2fb8 "Repel Phys" entry shares its final 物理 glyphs with
-    # a suffix at 0x2fc0. Translating that suffix independently creates a mixed
-    # SJIS/marker-ASCII stream. Translate only the complete pointer target.
-    0x2fb8: (16, "Repel Phys"),            # 反物理
-    0x2fc8: (16, "Repel Mind"),            # 反精神
-    0x2fd8: (16, "Res Fire/Ice"),          # 対火炎・氷結
-    0x2fe8: (16, "Res Elec/Force"),        # 対電撃・衝撃
-    0x2ff8: (16, "Res Phys"),              # 対物理
-    0x3008: (16, "Res Mind"),              # 対精神
-    0x3018: (16, "Res Force"),             # 対衝撃
-    0x3028: (16, "Res Elec"),              # 対電撃
-    0x3038: (16, "Res Ice"),               # 対氷結
-    0x3048: (16, "Res Fire"),              # 対火炎
-    0x3058: (16, "Normal"),                # ノーマル
-
     # ===================== ELEVATOR =====================
     # Raw executable duplicate of compressed message 0x0025.  The elevator
     # calls this literal directly, so translating bank 0 did not affect it.
@@ -490,11 +471,28 @@ AUDITED_SYSTEM_TEXT = {
     0x2f28: "Escape from battle.",
     0x2f40: "Talk to the demon.",
     0x2f54: "Start battle.",
-    0x2f68: "All Types",
-    0x2f78: "Holy Armor",
-    0x2f88: "Demon Armor",
-    0x2f98: "Drain Elec",
-    0x2fa8: "Drain Fire",
+    # Armor 相性 values. This is damage affinity/resistance, distinct from
+    # the 属性 equip-alignment row whose values are ALL/L/N/C. The entries are
+    # arranged in the pointer table's profile order, not address order.
+    # The original 0x2fb8 "Repel Phys" entry shares its final 物理 glyphs with
+    # a suffix at 0x2fc0. Translating that suffix independently creates a mixed
+    # SJIS/marker-ASCII stream. Translate only the complete pointer target.
+    0x3058: "Normal",         # ノーマル
+    0x3048: "Res Fire",       # 対火炎
+    0x3038: "Res Ice",        # 対氷結
+    0x3028: "Res Elec",       # 対電撃
+    0x3018: "Res Force",      # 対衝撃
+    0x3008: "Res Mind",       # 対精神
+    0x2ff8: "Res Phys",       # 対物理
+    0x2fe8: "Res Elec/Force", # 対電撃・衝撃
+    0x2fd8: "Res Fire/Ice",   # 対火炎・氷結
+    0x2fc8: "Repel Mind",     # 反精神
+    0x2fb8: "Repel Phys",     # 反物理
+    0x2fa8: "Drain Fire",     # 吸火炎
+    0x2f98: "Drain Elec",     # 吸電撃
+    0x2f88: "Demonic Ward",   # 魔性防具
+    0x2f78: "Holy Ward",      # 神聖防具
+    0x2f68: "Res All",        # 全対応
     0x3068: "Sorry... Your level is too low.",
     # Fusion result versus player; the stock text warns it cannot be summoned.
     0x3094: "Its alignment differs from yours. Fuse anyway?",
@@ -763,28 +761,13 @@ AUDITED_SYSTEM_TEXT = {
 }
 
 
-# Armor record byte +3 indexes this executable pointer table. Keep the English
-# in pointer order so the build can verify all 16 profiles semantically and
-# catch missing or overlapping translations.
+# Armor record byte +3 indexes this executable pointer table. Its 16 targets
+# run from 0x3058 down to 0x2f68 in fixed 0x10-byte slots. Derive that order
+# here so AUDITED_SYSTEM_TEXT remains the sole source of translated labels.
 _EQUIPMENT_AFFINITY_POINTER_TABLE = 0xE8220
-_EQUIPMENT_AFFINITY_TEXT = (
-    (0x3058, "Normal"),         # ノーマル
-    (0x3048, "Res Fire"),       # 対火炎
-    (0x3038, "Res Ice"),        # 対氷結
-    (0x3028, "Res Elec"),       # 対電撃
-    (0x3018, "Res Force"),      # 対衝撃
-    (0x3008, "Res Mind"),       # 対精神
-    (0x2ff8, "Res Phys"),       # 対物理
-    (0x2fe8, "Res Elec/Force"), # 対電撃・衝撃
-    (0x2fd8, "Res Fire/Ice"),   # 対火炎・氷結
-    (0x2fc8, "Repel Mind"),     # 反精神
-    (0x2fb8, "Repel Phys"),     # 反物理
-    (0x2fa8, "Drain Fire"),     # 吸火炎
-    (0x2f98, "Drain Elec"),     # 吸電撃
-    (0x2f88, "Demon Armor"),    # 魔性防具
-    (0x2f78, "Holy Armor"),     # 神聖防具
-    (0x2f68, "All Types"),      # 全対応
-)
+_EQUIPMENT_AFFINITY_FIRST_TEXT = 0x3058
+_EQUIPMENT_AFFINITY_TEXT_STRIDE = 0x10
+_EQUIPMENT_AFFINITY_COUNT = 16
 
 
 # Save-file LIST entries are sprintf format strings that begin with the JP game title
@@ -840,7 +823,12 @@ def apply_sys(exe):
         elif exe[off] != ASCII_MARKER:
             raise SystemExit(f"sys audit: 0x{off:x} is not marker-prefixed English")
 
-    for index, (target_off, english) in enumerate(_EQUIPMENT_AFFINITY_TEXT):
+    for index in range(_EQUIPMENT_AFFINITY_COUNT):
+        target_off = (
+            _EQUIPMENT_AFFINITY_FIRST_TEXT
+            - index * _EQUIPMENT_AFFINITY_TEXT_STRIDE
+        )
+        english = AUDITED_SYSTEM_TEXT[target_off]
         pointer = struct.unpack_from(
             "<I", exe, _EQUIPMENT_AFFINITY_POINTER_TABLE + index * 4
         )[0]
@@ -859,8 +847,11 @@ def apply_sys(exe):
             )
 
 
-# The demon-dismissal and item-discard confirmations are composed by dedicated
-# functions that append fixed exe slots around the name:
+# The demon-dismissal result and the demon-dismissal/item-discard confirmations
+# are composed by dedicated functions that append fixed exe slots around the
+# name:
+#   result  (0x80030830): ζ, 0x8762 window expansion, roster name,
+#                        と別れました/はずされました, 0x8763 acknowledgement
 #   dismiss (0x80030614): ζ, name-marker 0x8762, roster name, と別れます, δ, よろしいですか？
 #   discard (0x80033190): ζ, item name, を捨てます, δ, よろしいですか？
 # Japanese puts the name first, so a natural one-line English question needs its
@@ -898,6 +889,10 @@ _COMPOSED_SLOTS = (
 
 # (instruction address, expected stock word, replacement word)
 _COMPOSED_CODE = (
+    # dismissal result: English "[name] left." and "[name] was removed." both
+    # fit one line.  Keep the 0x8763 result acknowledgement, but do not append
+    # the preceding 0x8762 command that animates the frame to a second line.
+    (0x80030894, _APPEND_JAL, _NOP),       # append 0x8762 window expansion
     # demon dismissal: first append ζ 0x17b4 -> combo slot 0x17cc; drop the
     # geometry-changing marker, δ, and line 2; reset the one-line frame.
     (0x8003061c, 0x24840FB4, 0x24840FCC),  # addiu a0, a0, 0xfb4 -> 0xfcc
@@ -917,7 +912,7 @@ _COMPOSED_CODE = (
 
 
 def patch_composed_prompts(exe):
-    """Rebuild the dismiss/discard confirmations as one-line questions."""
+    """Keep dismissal results and dismiss/discard confirmations on one line."""
     for off, gap, expected_jp, data in _COMPOSED_SLOTS:
         if bytes(exe[off:off + len(expected_jp)]) != expected_jp:
             raise SystemExit(f"composed prompt 0x{off:x}: unexpected slot content")

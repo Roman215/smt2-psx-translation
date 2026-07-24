@@ -242,6 +242,13 @@ FIELD_NARROW_GLYPHS = {
     "m": 0x827c,
     "r": 0x827d,
 }
+# Private 10x10 glyph cells used only by the Cathedral compatibility matrix.
+# The normal proportional D and question mark are left-kerned for prose; these
+# copies are shifted inside their fixed eight-pixel matrix cells instead.
+CATHEDRAL_GRID_GLYPHS = {
+    0x827e: (0x8263, 2),  # D
+    0x8280: (0x8148, 2),  # ?
+}
 # One-byte tokens stored only inside Yamata's marker-prefixed cached name.
 # Both global marker printers translate them to FIELD_NARROW_GLYPHS, allowing
 # the raw and object-compositor paths to share the same compact rendering.
@@ -386,6 +393,29 @@ def kern_font(slpm):
                 if pixel == "#":
                     setbit10(glyph_start + y * W10 + x, 1)
 
+    # The Cathedral compatibility matrix can contain twelve columns after the
+    # COMP capacity upgrades. Its stock 10x10 circle reaches both horizontal
+    # cell edges, which makes adjacent circles touch when the widened English
+    # RACE/NAME layout uses an 8px grid. Keep the same glyph and height, but
+    # narrow its ink to seven centered columns so every cell retains a clear
+    # one-pixel gutter.
+    compact_circle_rows = (
+        "..........",
+        "...###....",
+        "..#...#...",
+        ".#.....#..",
+        ".#.....#..",
+        ".#.....#..",
+        ".#.....#..",
+        "..#...#...",
+        "...###....",
+        "..........",
+    )
+    compact_circle_start = sidx(0x819B) * W10 * H10
+    for y, row in enumerate(compact_circle_rows):
+        for x, pixel in enumerate(row):
+            setbit10(compact_circle_start + y * W10 + x, pixel == "#")
+
     def kern10(idx, left=0, sp=1):
         gb = idx*W10*H10
         rows = [[bit10(gb+y*W10+x) for x in range(W10)] for y in range(H10)]
@@ -402,6 +432,58 @@ def kern_font(slpm):
     for c in range(0x8281,0x829b): widths10[sidx(c)] = kern10(sidx(c))   # a-z
     for c in KERN_PUNCT: widths10[sidx(c)] = kern10(sidx(c))
     widths10[0] = 4  # space
+
+    # The stock 10x10 Latin baseline leaves its final raster row empty: normal
+    # letters end on row 7 and descenders on row 8. In the game's taller name
+    # fields this makes English demon/race text hug the top edge, while the
+    # unmodified numeric glyphs already extend through row 8. Lower the shared
+    # Latin and punctuation repertoire one pixel so its baseline matches the
+    # numbers and the text sits naturally at the bottom of those fields.
+    baseline_codes = (
+        [*range(0x8260, 0x827a), *range(0x8281, 0x829b)] + KERN_PUNCT
+    )
+    for code in baseline_codes:
+        glyph_start = sidx(code) * W10 * H10
+        rows = [
+            [bit10(glyph_start + y * W10 + x) for x in range(W10)]
+            for y in range(H10)
+        ]
+        if any(rows[-1]):
+            raise SystemExit(
+                f"cannot lower compact glyph {code:#06x} without clipping"
+            )
+        for pixel in range(W10 * H10):
+            setbit10(glyph_start + pixel, 0)
+        for y in range(H10 - 1):
+            for x in range(W10):
+                if rows[y][x]:
+                    setbit10(glyph_start + (y + 1) * W10 + x, 1)
+
+    # Matrix results use a fixed eight-pixel pitch, while the globally kerned
+    # D and question mark begin at their glyph origin. Copy them into private
+    # cells and shift the ink two pixels right so they share the same visual
+    # center as the compact circle and minus. The normal text glyphs remain
+    # untouched.
+    for dst_code, (src_code, shift) in CATHEDRAL_GRID_GLYPHS.items():
+        src_start = sidx(src_code) * W10 * H10
+        dst_index = sidx(dst_code)
+        dst_start = dst_index * W10 * H10
+        rows = [
+            [bit10(src_start + y * W10 + x) for x in range(W10)]
+            for y in range(H10)
+        ]
+        if any(rows[y][x] for y in range(H10)
+               for x in range(W10 - shift, W10)):
+            raise SystemExit(
+                f"Cathedral grid glyph {src_code:#06x} would be clipped"
+            )
+        for pixel in range(W10 * H10):
+            setbit10(dst_start + pixel, 0)
+        for y in range(H10):
+            for x in range(W10 - shift):
+                if rows[y][x]:
+                    setbit10(dst_start + y * W10 + x + shift, 1)
+        widths10[dst_index] = _CATHEDRAL_GRID_PITCH
 
     # Yamata-no-Orochi is seven pixels wider than the field HUD's 80px name
     # strip.  Give that one call site alternate a/o/m/r glyphs: their actual
@@ -982,7 +1064,8 @@ def _install_obj_vwf(exe, w32, widths10):
     def sidx(code):
         b1,b2=code>>8,code&0xff; row=(b1-0x81) if b1<0xa0 else (b1-0xc1); return (b2-0x40)+row*189
     for code in ([*range(0x8260,0x827a), *range(0x8281,0x829b)] +
-                 KERN_PUNCT + list(FIELD_NARROW_GLYPHS.values())):
+                 KERN_PUNCT + list(FIELD_NARROW_GLYPHS.values()) +
+                 list(CATHEDRAL_GRID_GLYPHS)):
         v=widths10.get(sidx(code))
         if v is not None: tbl[((code>>8)-0x81)*256+(code&0xff)]=v
     tbl[0x40]=widths10.get(0,4)
@@ -1507,6 +1590,10 @@ _CATHEDRAL_FIRST_NAME_X = 66
 _CATHEDRAL_FIRST_LEVEL_X = 166
 _CATHEDRAL_RESULT_X = 144
 _CATHEDRAL_RESULT_LEVEL_X = 268
+_CATHEDRAL_GRID_X = 192
+_CATHEDRAL_GRID_PITCH = 8
+_CATHEDRAL_GRID_COLUMNS = 12
+_CATHEDRAL_TEXT_SURFACE_WIDTH = 288
 
 # Four instructions which used to reset x to the stock NAME column.  Each is
 # replaced by ``cursor_x += 4`` after the race has been printed, so the demon
@@ -1645,7 +1732,9 @@ def _patch_cathedral_columns(exe, widths10):
     x=268) without abbreviating a demon name.
 
     The first-demon screen has no result field, so its NAME column moves 15
-    pixels right and its LV/numbered-affinity columns move 41 pixels right.  The
+    pixels right and its LV column moves 41 pixels right. Its compatibility
+    matrix uses compact 8-pixel cells beginning at x=192, allowing all twelve
+    possible demons to fit the 288-pixel surface without wrapping. The
     next-demon RESULT header/result rows move
     four pixels left, leaving a visible gap before LV even for the widest pair.
     """
@@ -1700,6 +1789,15 @@ def _patch_cathedral_columns(exe, widths10):
             f"ID {demon_id} {race} {demon!r} is {widest}px; "
             f"capacities are {source_capacity}px/{result_capacity}px"
         )
+    grid_end = _CATHEDRAL_GRID_X + \
+               _CATHEDRAL_GRID_COLUMNS * _CATHEDRAL_GRID_PITCH
+    if grid_end > _CATHEDRAL_TEXT_SURFACE_WIDTH:
+        raise SystemExit(
+            "Cathedral compatibility grid does not fit: "
+            f"x={_CATHEDRAL_GRID_X}, "
+            f"{_CATHEDRAL_GRID_COLUMNS}x{_CATHEDRAL_GRID_PITCH}px -> "
+            f"{grid_end}/{_CATHEDRAL_TEXT_SURFACE_WIDTH}px"
+        )
 
     def patch_word(address, expected, replacement, label):
         offset = foff(address)
@@ -1751,7 +1849,8 @@ def _patch_cathedral_columns(exe, widths10):
     for address in (0x8008d04c, 0x8008d2b0, 0x8008d398):
         patch_word(address, 0x24050085, 0x240500ae, "Cathedral LV header")
     for address in (0x8008d068, 0x8008d3b4):
-        patch_word(address, 0x24140098, 0x241400c1,
+        patch_word(address, 0x24140098,
+                   i_type(0x09, 0, 20, _CATHEDRAL_GRID_X),
                    "Cathedral affinity-header origin")
     # Special/equipment variants use joined race/name fields rather than the
     # independently aligned first-demon columns, so 18 pixels is sufficient.
@@ -1763,10 +1862,27 @@ def _patch_cathedral_columns(exe, widths10):
     for address in (0x8008e640, 0x8008ed64, 0x8008efd4):
         patch_word(address, 0x2405007d, 0x240500a6,
                    "Cathedral level field")
-    patch_word(0x8008e5d8, 0x24170099, 0x241700c2,
+    patch_word(0x8008e5d8, 0x24170099,
+               i_type(0x09, 0, 23, _CATHEDRAL_GRID_X),
                "Cathedral affinity-row origin")
-    patch_word(0x8008ef68, 0x24150099, 0x241500c2,
+    patch_word(0x8008ef68, 0x24150099,
+               i_type(0x09, 0, 21, _CATHEDRAL_GRID_X),
                "Cathedral alternate affinity-row origin")
+
+    # Both header variants and both matrix-row variants used an 11px pitch.
+    # The compact glyphs occupy a visually balanced 8px cell, and twelve such
+    # cells now end exactly at the text surface's exclusive right edge.
+    for address, register in (
+        (0x8008d0e0, 20), (0x8008d42c, 20),  # s4: numbered headers
+        (0x8008e728, 23), (0x8008e730, 23),  # s7: normal row outcomes
+        (0x8008f0ec, 21), (0x8008f0f4, 21),  # s5: alternate outcomes
+    ):
+        patch_word(
+            address,
+            i_type(0x09, register, register, 0x0B),
+            i_type(0x09, register, register, _CATHEDRAL_GRID_PITCH),
+            "Cathedral compatibility-grid pitch",
+        )
 
     # The special-fusion roster uses the same source pair but a different set
     # of fields.  Move only the three fields which begin before x=184; the
@@ -1810,6 +1926,23 @@ def _patch_confirm_font(exe):
         exe[off:off + len(relocated)] = relocated
 
 
+def _patch_cathedral_grid_symbols(exe):
+    """Use centered private glyphs for fixed-pitch Cathedral matrix results."""
+    replacements = (
+        (0x80014a4c, 0x8263, 0x827e, "D"),
+        (0x80014a50, 0x8148, 0x8280, "?"),
+    )
+    for address, stock_code, private_code, label in replacements:
+        offset = foff(address)
+        stock = stock_code.to_bytes(2, "big") + b"\0"
+        replacement = private_code.to_bytes(2, "big") + b"\0"
+        if bytes(exe[offset:offset + len(stock)]) != stock:
+            raise RuntimeError(
+                f"Unexpected Cathedral {label} string at {address:#010x}"
+            )
+        exe[offset:offset + len(replacement)] = replacement
+
+
 def apply_name_tables(exe, slpm, PATHS, widths10):
     # single-level [N u16 offsets][data]: (base, list, alloc_end)
     NT.rebuild_single(exe, 0x80102962, NT.DEMONS,    0x801034da, PATHS)  # demons  (311)
@@ -1829,6 +1962,7 @@ def apply_name_tables(exe, slpm, PATHS, widths10):
     _patch_compact_race_labels(exe)
     _patch_cathedral_race_font(exe)
     _patch_cathedral_columns(exe, widths10)
+    _patch_cathedral_grid_symbols(exe)
     _patch_confirm_font(exe)
     _patch_bar_drink_menu(exe)
     _patch_casino_prize_menu(exe)

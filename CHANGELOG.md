@@ -13,38 +13,49 @@ your own verified source image.
 
 ## [Unreleased]
 
+## [0.1.7] - 2026-07-23
+
+This release focuses on reliability and presentation fixes found after 0.1.6,
+especially in the new Demon Compendium, demon negotiation, equipment details,
+and Cathedral interfaces.
+
 ### Changed
 
-- Expanded the demon-negotiation composition audit to follow hard-coded
-  bank-5 connective records and reject reachable A14 joins without authored
-  whitespace.
-- Extended the source-dump utility to generate a Japanese/English comparison
-  for executable-resident system strings.
+- Reworked reusable demon-negotiation lines so their randomized combinations
+  join into natural English.
+- Polished Hiruko's request and Lord Masakado's revival dialogue against the
+  Japanese, improving the connected story scene while preserving its meaning
+  and formal tone.
+- Renamed the ambiguous special armor affinities to "Demonic Ward,"
+  "Holy Ward," and "Res All."
+- Expanded the translation-audit tools to check hard-coded negotiation joins
+  and generate a Japanese/English comparison for system text stored in the
+  executable.
 
 ### Fixed
 
-- Expanded the Demon Compendium's reused Devil Analysis sort tables from the
-  stock 186 enemy-oriented candidates to all 254 registerable base-table
-  demons, allowing fusion-only Elements such as Aquans and every other acquired
-  demon to appear.
-- Reworded and separated reusable negotiation transitions so random follow-up
-  requests form natural English instead of running together.
-- Corrected the charm outcome message to name the affected party member rather
-  than the opposing demon.
-- Corrected several shop and status system strings whose English used the wrong
-  subject, named blades where the Japanese only said weapons, or otherwise
-  changed the original meaning.
-- Prevented the Demon Compendium's price refresh from treating the ordinary
-  Devil Analysis list object as text, restoring its "Analyze whom?" prompt.
-- Reused the stock level-gate rejection for overleveled Compendium summons so
-  it explains the failure and waits for acknowledgement before returning to
-  the Cathedral menu.
-- Reworked Hiruko's request and Lord Masakado's revival dialogue against the
-  Japanese so the connected story scene reads naturally without losing its
-  meaning or formal tone.
-- Restored Skull Gi's "Repel Phys" shop affinity by translating its complete
-  shared-suffix string, and audited all 16 armor affinity labels and pointer
-  targets against the Japanese.
+- Made every acquired demon eligible to appear in the Demon Compendium,
+  including fusion-only Elements such as Aquans that were absent from the
+  original Devil Analyzer's enemy-oriented sort tables.
+- Restored the ordinary Devil Analyzer's "Analyze whom?" prompt after the
+  Compendium's summon-cost display had corrupted it.
+- Made the over-level Compendium rejection wait for acknowledgement before
+  returning to the Cathedral menu, matching the other summon failures.
+- Corrected the charm result message so it names the affected party member
+  instead of claiming that the opposing demon was charmed.
+- Corrected misleading shop and status text, including weapon-shop wording,
+  the armor-shop greeting, and other messages whose English used the wrong
+  subject or changed the Japanese meaning.
+- Restored Skull Gi's "Repel Phys" affinity and verified all 16 armor
+  resistance profiles against the Japanese data.
+- Kept all twelve columns of the Cathedral fusion compatibility matrix inside
+  the screen and centered its compact result symbols.
+- Lowered compact English demon names and races to sit naturally at the bottom
+  of their fields on fusion, status, and related screens.
+- Corrected the casino cashier's Dark/Gold Coin balance sentence, including
+  its missing space and misplaced coin type.
+- Kept the post-dismissal "[demon] left." result at a one-line height instead
+  of opening an unnecessary two-line message box.
 
 ## [0.1.6] - 2026-07-22
 
@@ -280,7 +291,8 @@ First public release.
 - Reproducible build (`build.py`) that patches a verified Japan Rev 1 image
   and emits distributable xdelta patches.
 
-[Unreleased]: https://github.com/Roman215/smt2-psx-translation/compare/v0.1.6...HEAD
+[Unreleased]: https://github.com/Roman215/smt2-psx-translation/compare/v0.1.7...HEAD
+[0.1.7]: https://github.com/Roman215/smt2-psx-translation/compare/v0.1.6...v0.1.7
 [0.1.6]: https://github.com/Roman215/smt2-psx-translation/compare/v0.1.5...v0.1.6
 [0.1.5]: https://github.com/Roman215/smt2-psx-translation/compare/v0.1.4...v0.1.5
 [0.1.4]: https://github.com/Roman215/smt2-psx-translation/compare/v0.1.3...v0.1.4
