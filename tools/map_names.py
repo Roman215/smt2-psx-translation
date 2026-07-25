@@ -15,8 +15,9 @@ the free rodata font-placeholder cave and REPOINT both tables. No code changes.
 Cave: two spans, see CAVES.  0x800d7500 .. 0x800d8100 is part of the original
 font-placeholder run.  The remainder is reserved by build.py for its compact
 demon-name cache converter at 0x800d8100, cached-name glyph migrator at
-0x800d8180, casino prize-name measuring routine at 0x800d8290, and the
-marker-based system-string printer/ASCII table at
+0x800d8180, equipment-shop affinity font wrappers at 0x800d8244, casino
+prize-name measuring routine at 0x800d8290, and the marker-based
+system-string printer/ASCII table at
 0x800d8300 .. 0x800d8500.
 
 The '@' break is INVISIBLE: it splits the two-line save/load display but contributes
@@ -49,7 +50,9 @@ STR_LO, STR_HI = 0x80016000, 0x80017000     # original string block bounds
 DEMON_NAME_CACHE_CAVE = 0x800d8100
 DEMON_NAME_CACHE_CAVE_END = 0x800d8180
 DEMON_NAME_MIGRATOR_CAVE = 0x800d8180
-DEMON_NAME_MIGRATOR_CAVE_END = 0x800d8290
+# The migrator occupies this range exactly. build.py uses the following tofu
+# bytes for equipment-shop affinity font wrappers before the casino code cave.
+DEMON_NAME_MIGRATOR_CAVE_END = 0x800d8244
 # The no-enhancements build can use the full first span.  The default Demon
 # Compendium occupies 0x800d6d20..0x800d7254, so the enhanced layout stops this
 # span at that exact boundary and moves the remaining names into the second

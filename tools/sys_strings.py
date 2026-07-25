@@ -443,6 +443,7 @@ AUDITED_SYSTEM_TEXT = {
     # (0x17bc/0x1b8c, the composed-confirm suffixes, are rebuilt by
     # patch_composed_prompts.)
     0x1964: "Short on cash",
+    0x2314: "Items",
     0x231c: "Spirits",
     0x2c40: "Analyze defeated demons.",
     0x2c60: "Auto-Recover the entire party.",

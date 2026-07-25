@@ -1,6 +1,6 @@
 # Shin Megami Tensei II (PSX) English Translation
 
-Work-in-progress fan translation tools for the PlayStation release of *Shin
+Fully playable fan translation tools for the PlayStation release of *Shin
 Megami Tensei II*. This repository contains only the translation source and
 build tooling. It does not contain, distribute, or download game data.
 

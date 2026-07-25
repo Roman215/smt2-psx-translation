@@ -1640,14 +1640,16 @@ TRANS = {
     0x2006:["10",'ED'],
     0x2007:["0 for one ",'CR','ED'],
     # The cashier dynamically inserts Dark/Gold between 0x2004/0x2007/0x200a
-    # when explaining the exchange rate, and between 0x2016/0x2017 when
-    # reporting the player's balance. Keep the trailing space usable by both
-    # stock fragment sequences.
+    # when explaining the exchange rate, directly before 0x200b in the usage
+    # warning, and between 0x2016/0x2017 when reporting the player's balance.
+    # Keep the trailing space usable by every stock fragment sequence, and
+    # begin each following fragment with "Coin(s)" for English word order.
     0x2008:["Dark ",'ED'],
     0x2009:["Gold ",'ED'],
     0x200a:["Coin.",'WT',"Win enough Coins and you can",'CR',"trade them for fabulous prizes!",'WT',
       "We'll hold on to any Coins",'CR',"you have left over.",'WT','PG','ED'],
-    0x200b:["Remember, Coins can only be used",'CR',"here in the casino.",'WT','ED'],
+    0x200b:["Coins can only be used",'CR',
+      "here in the casino, so keep that in mind.",'WT','ED'],
     0x200c:['PG',"What would you like to do?",'ED'],
     0x200d:['PG',"Each Coin costs ћ",'ED'],
     0x200e:["0.",'WT',"How many would you like?",'WT','ED'],
@@ -2367,8 +2369,8 @@ TRANS = {
     0x2132:["If you proceed farther into",'CR',"the castle, you will not",'CR',
       "return alive.",'WT','ED'],
     0x2133:["A curse upon the foolish humans",'CR',"who laid hands upon Lord Lucifer!",'WT','ED'],
-    0x2134:["Fairy: Oh? I don't recognize you.",'CR',"Did you flee Millennium, too?",'WT','ED'],
-    0x2135:["Fairy: ",'FO','CR',"works hard for the sake",'CR',"of all us fairies.",'WT','ED'],
+    0x2134:["Pixie: Oh? I don't recognize you.",'CR',"Did you flee Millennium, too?",'WT','ED'],
+    0x2135:["Pixie: ",'FO','CR',"works hard for the sake",'CR',"of all us fairies.",'WT','ED'],
     0x2136:["Goblin: Puck isn't evil, but his",'CR',"pranks get so out of hand",'CR',
       "that he drives everyone crazy.",'WT',"You should watch out, too.",'WT','ED'],
     0x2137:["Goblin: Looking for Puck?",'CR',"He often plays in the dungeon",'CR',

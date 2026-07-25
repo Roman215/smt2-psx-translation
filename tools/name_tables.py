@@ -13,9 +13,9 @@ DEMONS = [
  "Thor","Indra","Barong","Genbu","Anubis","Narasinha","Sphinx","Nandi","Byakko","Pabilsag","Bastet",
  "Apis","Unicorn","Heqet","Salamander","Undine","Sylph","Gnome","Flaemis","Aquans","Aeros","Erthys",
  "Shiva","Susano-o","Seiten Taisei","Chernobog","Ares","Ananta","Rahabh","Itzamna","Seiryuu",
- "Quetzalcoatl","Pek Young","Maya","Kali","Ishtar","Durga","Kikuri-hime","Hariti","Ta-weret",
- "Arahabaki","Takeminakata","O-namuchi","Kotoshironushi","Sarutahiko","Hitokotonushi","Sukunahikona",
- "O-Yamatsumi","Dominion","Virtue","Power","Principality","Archangel","Angel","Morrigan","Macha",
+ "Quetzalcoatl","Pek Young","Maya","Kali","Ishtar","Durga","Kikuri-hime","Hariti","Taueret",
+ "Arahabaki","Take-Minakata","Okuninushi","Kotoshironushi","Sarutahiko","Hitokoto-Nushi","Sukuna-Hikona",
+ "Ouyamatsumi","Dominion","Virtue","Power","Principality","Archangel","Angel","Morrigan","Macha",
  "Nemhain","Aello","Kelaino","Ocypete","Bennu","Adept","Terminator","Gyrator","Temple Knight",
  "Executioner","Neophyte","Butcher","Yamata-no-Orochi","Vritra","Raja Naga","Oto-hime","Mizuchi",
  "Naga","Nozuchi","Hanuman","Ganesha","Djinn","Tengu","Haokah","Mercurius","Cerberus","Gdon","Selket",
@@ -38,7 +38,7 @@ DEMONS = [
  "Lucifuge","Hecate","Atavaka","Master Therion","Abaddon","Astaroth","Kumbhira","Vajra","Mihira","Antila",
  "Majira","Santira","Indara","Pajra","Makura","Sindura","Catura","Vikarala","Tiamat","Virocana","Mara",
  "Lucifer","Kuzuryu","Sabaoth","Shaddai","Elohim","Satan","YHVH","YHVH","Beelzebub","Alice","Ghost Q",
- "Sage of Time","Hell's Angel","Matador","Gabriel","Gomory",
+ "Sage of Time","Hell Biker","Matador","Gabriel","Gomory",
 ]
 
 # ---- RACES: name-type 11, base 0x801043f8, 44 entries (game order -> Atlus race) ----

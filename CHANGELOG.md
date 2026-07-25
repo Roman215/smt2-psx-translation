@@ -13,11 +13,25 @@ your own verified source image.
 
 ## [Unreleased]
 
+## [0.1.8] - 2026-07-25
+
+This patch marks the translation as fully playable and corrects several
+remaining interface, terminology, and speaker-label issues found after 0.1.7.
+
 ### Fixed
 
+- Corrected another Dark/Gold Coin casino fragment so the dynamic coin type
+  precedes "Coins" instead of incorrectly preceding "Remember."
+- Translated the missing "Items" heading above Rag's Shop exchange-item panel.
+- Rendered equipment-shop affinity captions and values with the compact font,
+  keeping every translated affinity inside its comparison-panel row.
 - Restored the omitted Warrior and Divine General race-table entries so
   special Fiends such as Alice resolve race ID 43 as "Fiend" instead of
   decoding adjacent compressed data as garbage.
+- Standardized the demon and enemy names Taueret, Take-Minakata, Okuninushi,
+  Hitokoto-Nushi, Sukuna-Hikona, Ouyamatsumi, Corpses, and Hell Biker.
+- Identified the Pixie speaking about Puck by name instead of using the generic
+  "Fairy" label.
 
 ## [0.1.7] - 2026-07-23
 
@@ -297,7 +311,8 @@ First public release.
 - Reproducible build (`build.py`) that patches a verified Japan Rev 1 image
   and emits distributable xdelta patches.
 
-[Unreleased]: https://github.com/Roman215/smt2-psx-translation/compare/v0.1.7...HEAD
+[Unreleased]: https://github.com/Roman215/smt2-psx-translation/compare/v0.1.8...HEAD
+[0.1.8]: https://github.com/Roman215/smt2-psx-translation/compare/v0.1.7...v0.1.8
 [0.1.7]: https://github.com/Roman215/smt2-psx-translation/compare/v0.1.6...v0.1.7
 [0.1.6]: https://github.com/Roman215/smt2-psx-translation/compare/v0.1.5...v0.1.6
 [0.1.5]: https://github.com/Roman215/smt2-psx-translation/compare/v0.1.4...v0.1.5

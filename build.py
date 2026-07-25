@@ -638,6 +638,7 @@ def build_exe(font_slpm, widths, widths10, slpm):
     _install_compact_name_migrator(exe, w32)
     _patch_elevator_floor_labels(exe, w32)
     _patch_long_demon_name_layouts(exe, widths, widths10)
+    _patch_equipment_shop_affinity_layout(exe, widths10)
     _patch_message_control_literals(exe, w32)
     _relocate_bank7_base(exe, w32)
     _relocate_name_buffer(exe, w32)
@@ -1539,6 +1540,139 @@ def _patch_long_demon_name_layouts(exe, widths, widths10):
         for address in sites:
             patch_word(address, 0x24050000 | stock_x,
                        0x24050000 | new_x, "status-selection column")
+
+
+# The equipment-comparison compositor is a 112px-wide surface. Armor affinity
+# captions and values share its y=30 row; the stock 12x12 layout begins the
+# value at x=36, leaving only 76px and making "Res Elec/Force" spill into the
+# following surface row. Two tiny tail-call wrappers switch only the affinity
+# caption to the compact font and restore the stock font before the following
+# Effect/Align captions. The value has its own selector and origin below.
+EQUIPMENT_AFFINITY_FONT_CAVE = 0x800d8244
+EQUIPMENT_AFFINITY_FONT_CAVE_END = 0x800d8264
+EQUIPMENT_AFFINITY_SURFACE_WIDTH = 112
+EQUIPMENT_AFFINITY_LABEL_X = 4
+EQUIPMENT_AFFINITY_VALUE_X = 30
+
+
+def _patch_equipment_shop_affinity_layout(exe, widths10):
+    """Keep every armor affinity on one compact-font equipment-shop row."""
+    def sidx(code):
+        b1, b2 = code >> 8, code & 0xff
+        row = (b1 - 0x81) if b1 < 0xa0 else (b1 - 0xc1)
+        return (b2 - 0x40) + row * 189
+
+    def text_width(text):
+        return sum(
+            widths10.get(sidx(ET.fullwidth(char)), 10) for char in text
+        )
+
+    label = SS.AUDITED_SYSTEM_TEXT[0x672c]
+    label_width = text_width(label)
+    if EQUIPMENT_AFFINITY_LABEL_X + label_width + 2 > EQUIPMENT_AFFINITY_VALUE_X:
+        raise SystemExit(
+            f"equipment affinity caption {label!r} is {label_width}px; "
+            "it collides with the value column"
+        )
+
+    affinities = [
+        SS.AUDITED_SYSTEM_TEXT[
+            SS._EQUIPMENT_AFFINITY_FIRST_TEXT
+            - index * SS._EQUIPMENT_AFFINITY_TEXT_STRIDE
+        ]
+        for index in range(SS._EQUIPMENT_AFFINITY_COUNT)
+    ]
+    available = EQUIPMENT_AFFINITY_SURFACE_WIDTH - EQUIPMENT_AFFINITY_VALUE_X
+    overflows = [
+        (text, text_width(text)) for text in affinities
+        if text_width(text) > available
+    ]
+    if overflows:
+        details = ", ".join(f"{text!r}={width}px" for text, width in overflows)
+        raise SystemExit(
+            f"equipment affinity values exceed the compact {available}px "
+            f"field: {details}"
+        )
+
+    # The live object descriptor confirms that its 28 four-pixel words expose
+    # the 112px surface audited above.
+    context = foff(0x800ee5e4)
+    surface_words, surface_height = struct.unpack_from("<HH", exe, context + 0x16)
+    if (surface_words, surface_height) != (28, 72):
+        raise SystemExit(
+            "unexpected equipment-comparison text surface geometry: "
+            f"{surface_words}x{surface_height}"
+        )
+
+    ZERO, A0, T0 = 0, 4, 8
+    RI = lambda op, rs, rt, imm: (
+        ((op & 0x3f) << 26)
+        | ((rs & 0x1f) << 21)
+        | ((rt & 0x1f) << 16)
+        | (imm & 0xffff)
+    )
+    ADDIU = lambda rt, rs, imm: RI(0x09, rs, rt, imm)
+    SB = lambda rt, off, rs: RI(0x28, rs, rt, off)
+    J = lambda target: (0x02 << 26) | ((target >> 2) & 0x03ffffff)
+    JAL = lambda target: (0x03 << 26) | ((target >> 2) & 0x03ffffff)
+    OBJ_PRINT = 0x8004c7c0
+
+    compact_wrapper = (
+        ADDIU(T0, ZERO, 2),  # object font 2: 10x10
+        SB(T0, 8, A0),
+        J(OBJ_PRINT),
+        0,
+    )
+    restore_wrapper = (
+        ADDIU(T0, ZERO, 3),  # object font 3: stock 12x12
+        SB(T0, 8, A0),
+        J(OBJ_PRINT),
+        0,
+    )
+    wrappers = compact_wrapper + restore_wrapper
+    if (EQUIPMENT_AFFINITY_FONT_CAVE + len(wrappers) * 4
+            != EQUIPMENT_AFFINITY_FONT_CAVE_END
+            or EQUIPMENT_AFFINITY_FONT_CAVE != MN.DEMON_NAME_MIGRATOR_CAVE_END):
+        raise SystemExit("equipment affinity font-wrapper cave layout changed")
+    cave = exe[
+        foff(EQUIPMENT_AFFINITY_FONT_CAVE):
+        foff(EQUIPMENT_AFFINITY_FONT_CAVE_END)
+    ]
+    if set(cave) - {0x00, 0x06, 0x60}:
+        raise SystemExit("equipment affinity font-wrapper cave is not free tofu")
+    for index, word in enumerate(wrappers):
+        struct.pack_into(
+            "<I", exe, foff(EQUIPMENT_AFFINITY_FONT_CAVE) + index * 4, word
+        )
+
+    def patch_word(address, expected, replacement, label):
+        actual = struct.unpack_from("<I", exe, foff(address))[0]
+        if actual != expected:
+            raise SystemExit(
+                f"{label} {address:#x}: {actual:#010x} != {expected:#010x}"
+            )
+        struct.pack_into("<I", exe, foff(address), replacement)
+
+    stock_print = JAL(OBJ_PRINT)
+    patch_word(
+        0x80095c88, stock_print, JAL(EQUIPMENT_AFFINITY_FONT_CAVE),
+        "equipment affinity caption font",
+    )
+    restore = JAL(EQUIPMENT_AFFINITY_FONT_CAVE + 0x10)
+    for address in (0x80095cc0, 0x80095ce0):
+        patch_word(
+            address, stock_print, restore,
+            "post-affinity caption font restore",
+        )
+    patch_word(
+        0x80095de8, 0x24050003, 0x24050002,
+        "equipment affinity value font",
+    )
+    patch_word(
+        0x80095df0, 0x24050024,
+        0x24050000 | EQUIPMENT_AFFINITY_VALUE_X,
+        "equipment affinity value origin",
+    )
 
 # ============================ 3. NAME TABLES ============================
 _COMPACT_RACE_POOL_START = 0x80011f9c
@@ -2748,6 +2882,8 @@ def _validate_cave_layouts():
          MN.DEMON_NAME_CACHE_CAVE_END),
         ("cached-name migrator", MN.DEMON_NAME_MIGRATOR_CAVE,
          MN.DEMON_NAME_MIGRATOR_CAVE_END),
+        ("equipment affinity font wrappers", EQUIPMENT_AFFINITY_FONT_CAVE,
+         EQUIPMENT_AFFINITY_FONT_CAVE_END),
         ("casino prize-name measurer", PRIZE_CAVE, PRIZE_CAVE_END),
         ("system-string printer and ASCII table", 0x800d8300, 0x800d8500),
         ("relocated bank 7", BANK7_CAVE, BP.AB4_HANDLER),
