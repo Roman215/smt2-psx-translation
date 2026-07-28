@@ -13,6 +13,20 @@ the Cathedral menu is rendered.
 The stock save writer RLE-compresses this payload but falls back to the raw
 0x3260 bytes whenever compression would be larger; its record capacity is
 0x32fb bytes.  Registration can therefore never overflow a save record.
+
+Summoning is a repeated errand, so the browser is reopened after every result
+-- a purchase or any refusal -- and only cancelling returns to the Cathedral
+menu.  Each pass is a complete browser session; what carries across is REENTER,
+raised by selection() and dropped when the loop ends.  While it stands, the
+three shared Devil Analysis call sites it gates skip the sort chooser and leave
+the list window alone, so the player resumes on the demon they were just on
+with the order they picked.  All three are stock whenever REENTER is clear,
+which it is everywhere outside this loop.
+
+Races whose demons can be fought but never obtained (see
+COMPENDIUM_HIDDEN_RACES) are dropped from the browser, since a Compendium row
+the game can never fill only reads as a hole in the player's collection.  They
+remain ordinary Devil Analysis entries.
 """
 
 import hashlib
@@ -38,6 +52,12 @@ FLAG = 0x800D7240
 RESULT = 0x800D7244
 OLD_SELECTION = 0x800D7248
 MENU_COUNT = 0x800D724C
+# Set only between one browser session and the next one the Compendium opens
+# for itself, so the two shared Devil Analysis hooks it gates stay stock
+# everywhere else -- including ordinary Analysis opened right afterwards.
+# Both are halfwords: the last free state word holds the pair.
+REENTER = 0x800D7250
+SAVED_SORT = 0x800D7252
 # End on glyph 694 exactly, immediately before the established VWF cave.
 CAVE_END = 0x800D7254
 CAVE_SOURCE_SHA256 = "95df4aea925f93f1dd3fd7276523231c66155450416e054016b24347d97ba74d"
@@ -143,12 +163,56 @@ ANALYSIS_ALIGNMENT_ORDER = (
     8, 16, 17, 18, 19, 20, 21, 22, 31, 32, 33, 34,
     9, 10, 11, 12, 23, 24, 25, 26, 35, 36, 37, 38, 39, 40,
 )
+# Races whose demons appear as enemies but can never be recruited, fused, or
+# granted, so their registration bit can never be set.  In ordinary Devil
+# Analysis they are legitimate entries -- looking up a Machine you are about to
+# fight is exactly what Analysis is for -- but as Compendium rows they would be
+# permanently empty and read as a gap in the player's collection that no amount
+# of play can close.  The browser therefore drops them while the Cathedral owns
+# it, and leaves the Analysis orders themselves untouched.
+COMPENDIUM_HIDDEN_RACES = {29: "Machine", 30: "Vaccine", 40: "Virus"}
+
+# Stock flag 182 is Steven's Compendium upgrade: once set, the Analysis list
+# builders keep unavailable demons as greyed-out rows instead of omitting them.
+# All four sorters test it through this one call, which is what makes hiding a
+# race a single wrapper rather than four.
+ANALYSIS_UNKNOWN_ROWS_FLAG_CALLS = (0x8001A3EC, 0x8001A4B0, 0x8001A574, 0x8001A638)
+ANALYSIS_UNKNOWN_ROWS_FLAG = 0x8006706C
+
 # Devil Analysis' list-window object.  The stock selection handler reads the
 # absolute highlighted index at +0x8e (unlike +0x80, which is only the cursor's
 # visible row and would become wrong after scrolling a longer list).
 ANALYSIS_LIST_WINDOW = 0x800EC484
 SORT_UI_SELECTION = ANALYSIS_LIST_WINDOW + 0x8E
 ANALYSIS_LIST_UPDATE_CALL = 0x80031174
+# Devil Analysis clears the list window's scroll offset, cursor row and
+# absolute index twice around a session: once as it opens, and once in the
+# cancel/close cleanup the Compendium's own selection path exits through.
+# Re-entering after a summon has to survive both, so these two call sites are
+# redirected rather than the shared helper they reach.
+ANALYSIS_LIST_RESET_CALLS = (0x8007F47C, 0x8007F568)
+ANALYSIS_LIST_RESET = 0x8004C84C
+# Screen records are {enter, update, exit}.  Devil Analysis normally opens on
+# the sort chooser and reaches the demon list only after the player picks an
+# order; re-entry pushes the list record directly so the chosen order stands.
+ANALYSIS_SORT_SCREEN = 0x800EA4E8
+ANALYSIS_LIST_SCREEN = 0x800EA4F4
+ANALYSIS_SCREEN_PUSH_CALL = 0x8002F10C
+ANALYSIS_SCREEN_PUSH = 0x800210A8
+# The chosen order is the sort chooser's own cursor row.  Devil Analysis' setup
+# zeroes it on the way into every session in the Cathedral's context, so the
+# Compendium copies it out as one session ends and puts it back in the next.
+ANALYSIS_SORT_SELECTION = 0x800EC7B4
+# 0x80056840 only *starts* a system message: it hands the text to the renderer
+# and sets the busy word, or, if one is already running, appends to an eight
+# deep pending queue.  Playing it out belongs to the field loop, which the
+# Compendium no longer returns to between summons -- so the browser reopened
+# over each message and the next call queued instead of displaying, until every
+# deferred message fired in a burst on the way out.  This is the stock blocking
+# pump: it advances frames until the busy word clears, draining the queue, and
+# it is what ordinary Devil Analysis already calls after its own result message
+# at 0x8007f600.
+MESSAGE_PLAYOUT = 0x8008B474
 # The Cathedral's event choices and persistent room-dialogue compositor share
 # UI texture storage with Devil Analysis' blue sort chooser.  Both must be
 # suppressed while the browser is active or the sort labels appear in the
@@ -253,6 +317,62 @@ class _Asm:
         return bytes(out)
 
 
+_LOAD_OPS = {0x20, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26}
+_STORE_OPS = {0x28, 0x29, 0x2A, 0x2B}
+_IMM_OPS = {0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E}
+_BRANCH_OPS = {0x04, 0x05}
+
+
+def _reads(word, register):
+    """Whether an already-assembled instruction reads `register`."""
+    op = word >> 26
+    rs, rt = (word >> 21) & 0x1F, (word >> 16) & 0x1F
+    if op == 0x00:                                  # R-type: rs and rt
+        return rs == register or rt == register
+    if op in _STORE_OPS or op in _BRANCH_OPS:       # base and value / operands
+        return rs == register or rt == register
+    if op in _LOAD_OPS or op in _IMM_OPS:           # base / source only
+        return rs == register
+    return False
+
+
+def _check_load_delays(asm, description):
+    """Reject a load whose result is read by the very next instruction.
+
+    The R3000 exposes its load delay slot -- the stock game fills every one --
+    and the symptom is silent: the reader sees whatever the register held
+    before.  Branch targets are checked too, since a load in a delay slot is
+    followed by the target, not by the fallthrough.
+    """
+    words = []
+    for item in asm.items:
+        if isinstance(item, tuple):
+            _kind, op, rs, rt, label, _pc = item
+            words.append(((op << 26) | (asm.R[rs] << 21) | (asm.R[rt] << 16),
+                          label))
+        else:
+            words.append((item, None))
+    index_of = {address: i for i, address in
+                enumerate(range(asm.base, asm.base + 4 * len(words), 4))}
+    for i, (word, _label) in enumerate(words):
+        if word >> 26 not in _LOAD_OPS:
+            continue
+        loaded = (word >> 16) & 0x1F
+        if loaded == 0 or i + 1 >= len(words):
+            continue
+        successors = [i + 1]
+        branch_label = words[i - 1][1] if i else None
+        if branch_label is not None:                # this load is a delay slot
+            successors = [index_of[asm.labels[branch_label]]]
+        for successor in successors:
+            if successor < len(words) and _reads(words[successor][0], loaded):
+                raise SystemExit(
+                    f"compendium: {description} at "
+                    f"{asm.base + 4 * i:#x} loads a register the next "
+                    "instruction reads; fill the load delay slot"
+                )
+
+
 def _hi(address):
     return ((address >> 16) + (1 if address & 0x8000 else 0)) & 0xFFFF
 
@@ -284,6 +404,75 @@ def _patch_jump(exe, address, target):
 def _patch_call(exe, address, target):
     struct.pack_into("<I", exe, _foff(address),
                      (0x03 << 26) | ((target >> 2) & 0x03FFFFFF))
+
+
+def _check_hidden_races(exe):
+    """Pin everything the re-entry and hidden-race hooks assume."""
+    from name_tables import RACES
+
+    for race, name in sorted(COMPENDIUM_HIDDEN_RACES.items()):
+        if race >= len(RACES) or RACES[race] != name:
+            raise SystemExit(
+                f"compendium: Analysis race {race} is no longer {name!r}; "
+                "the hidden-race ID ranges must be rechecked"
+            )
+    hidden = sum(count for _start, count in _hidden_id_ranges())
+    expected = sum(
+        ANALYSIS_RACE_BOUNDARIES[race] - ANALYSIS_RACE_BOUNDARIES[race - 1]
+        for race in COMPENDIUM_HIDDEN_RACES
+    )
+    if hidden != expected:
+        raise SystemExit("compendium: hidden-race ID ranges do not cover their races")
+
+    # The sort chooser and demon-list screen records must stay adjacent and in
+    # this order: pick_screen reaches the second by adding their distance.
+    for address, enter, description in (
+        (ANALYSIS_SORT_SCREEN, 0x80030AA8, "sort chooser"),
+        (ANALYSIS_LIST_SCREEN, 0x80030D94, "demon list"),
+    ):
+        _expect(exe, address, struct.pack("<I", enter),
+                f"unexpected Analysis {description} screen record")
+    # lui v0, 0x800f ; lh v1, -14412(v0) -- the demon list reading the sort
+    # chooser's cursor row, which is what survives a Compendium re-entry.
+    _expect(exe, 0x80030DF4, bytes.fromhex("0f 80 02 3c b4 c7 43 84"),
+            "unexpected Analysis sort-order read")
+
+
+def _hidden_id_ranges():
+    """Hidden races as (first ID, count) pairs, merging adjacent races."""
+    ranges = []
+    for race in sorted(COMPENDIUM_HIDDEN_RACES):
+        start = ANALYSIS_RACE_BOUNDARIES[race - 1]
+        stop = ANALYSIS_RACE_BOUNDARIES[race]
+        if ranges and ranges[-1][1] == start:
+            ranges[-1][1] = stop
+        else:
+            ranges.append([start, stop])
+    return tuple((start, stop - start) for start, stop in ranges)
+
+
+def _emit_hidden_lead(a, value, scratch):
+    """Opening subtract of the hidden-race test, split out so callers can put
+    it in a branch delay slot."""
+    a.addiu(scratch, value, -_hidden_id_ranges()[0][0])
+
+
+def _emit_hidden_test(a, value, scratch, target, lead=True):
+    """Branch to `target` when `value` holds a hidden race's demon ID.
+
+    Each range costs one compare and one branch; the following range's subtract
+    rides in the branch delay slot, where it is dead if the branch is taken.
+    """
+    ranges = _hidden_id_ranges()
+    if lead:
+        _emit_hidden_lead(a, value, scratch)
+    for index, (start, count) in enumerate(ranges):
+        a.sltiu(scratch, scratch, count)
+        a.bne(scratch, "zero", target)
+        if index + 1 < len(ranges):
+            a.addiu(scratch, value, -ranges[index + 1][0])
+        else:
+            a.nop()
 
 
 def _analysis_race(demon_id):
@@ -401,9 +590,12 @@ def _emit_code():
     # Preserve the renderer's return address in a register untouched by the
     # leaf roster migrator. This delay slot runs for both Cathedral layouts.
     a.move("t5", "ra")
-    _load_addr(a, "t0", MENU_SCRIPT_FULL)
+    # The two layouts are neighbours, so the second address is one add away.
+    a.addiu("t0", "t0", MENU_SCRIPT_FULL - MENU_SCRIPT_EARLY)
     a.bne("a1", "t0", "menu_start_other")
-    a.nop()
+    # The branch has read t0; the non-Cathedral path needs the cave's state
+    # page next, and the Cathedral path rebuilds t0 after its call anyway.
+    a.lui("t0", _hi(FLAG))
     a.label("menu_start_cathedral")
     # Register the held roster as soon as the enhanced Cathedral menu is
     # rendered, before the player can enter fusion and consume ingredients.
@@ -412,16 +604,16 @@ def _emit_code():
     a.nop()
     a.move("ra", "t5")
     a.addiu("t3", "a2", 1)
-    _load_addr(a, "t0", FLAG)
-    a.sw("t3", MENU_COUNT - FLAG, "t0")
+    # Every cave state word shares one page, so a single LUI addresses them all.
+    a.lui("t0", _hi(FLAG))
+    a.sw("t3", _lo(MENU_COUNT), "t0")
     a.addiu("a2", "a2", 1)
     a.addiu("t1", "zero", 1)
-    a.sw("t1", 0, "t0")
+    a.sw("t1", _lo(FLAG), "t0")
     a.j(0x8005B920)
     a.move("s6", "v1")
     a.label("menu_start_other")
-    _load_addr(a, "t0", FLAG)
-    a.sw("zero", 0, "t0")
+    a.sw("zero", _lo(FLAG), "t0")
     a.j(0x8005B920)
     a.move("s6", "v1")
 
@@ -430,20 +622,18 @@ def _emit_code():
     # Compendium below, so synthesize Exit as the new final row and retain its
     # stock branch offset without reading into the following script command.
     a.label("menu_loop")
-    _load_addr(a, "t0", FLAG)
-    a.lw("t1", 0, "t0")
+    a.lui("t0", _hi(FLAG))
+    a.lw("t1", _lo(FLAG), "t0")
     a.addiu("t2", "zero", 1)
     a.bne("t1", "t2", "menu_loop_stock")
-    a.nop()
-    a.lw("t2", MENU_COUNT - FLAG, "t0")
-    a.nop()
-    a.bne("s0", "t2", "menu_loop_stock")
-    a.nop()
+    # The count load is dead on the stock path and covers its own load delay
+    # with the label-table base the synthetic row needs next.
+    a.lw("t3", _lo(MENU_COUNT), "t0")
     a.lui("t0", 0x8010)
-    a.addiu("t0", "t0", -0x7B7C)
+    a.bne("s0", "t3", "menu_loop_stock")
     a.sll("t1", "s0", 2)
     a.addu("t0", "t0", "t1")
-    a.lw("a0", 0, "t0")
+    a.lw("a0", -0x7B7C, "t0")
     a.addiu("a1", "zero", EXIT_ENTRY)
     a.jal(0x80067168)
     a.nop()
@@ -467,8 +657,8 @@ def _emit_code():
     # every stock event script.
     a.label("event_update")
     a.lw("a0", 0x15E0, "v0")
-    _load_addr(a, "t0", FLAG)
-    a.lw("t1", 0, "t0")
+    a.lui("t0", _hi(FLAG))
+    a.lw("t1", _lo(FLAG), "t0")
     # The stock Analysis browser yields through the normal frame updater while
     # it remains on this call stack.  Suppress recursive event interpretation
     # for that interval or the synthetic pointer is executed as field script.
@@ -476,7 +666,9 @@ def _emit_code():
     # ADDIU also fills the load-delay slot for t1.  FLAG is written only as
     # 0 (inactive), 1 (Cathedral menu) or 2 (Analysis browser active).
     a.beq("t1", "t2", "event_update_active")
-    a.nop()
+    # Start the synthetic pointer in the delay slot; t0 is dead on both of the
+    # paths that fall past this branch.
+    a.lui("t0", _hi(0x80107568 + SENTINEL))
     a.bne("t1", "zero", "event_update_done")
     a.nop()
     a.label("event_update_stock")
@@ -485,7 +677,7 @@ def _emit_code():
     a.j(0x800545BC)
     a.nop()
     a.label("event_update_active")
-    _load_addr(a, "t0", 0x80107568 + SENTINEL)
+    a.addiu("t0", "t0", _lo(0x80107568 + SENTINEL))
     a.bne("a0", "t0", "event_update_stock")
     a.nop()
     a.jal(0)  # fixed to compendium after labels are known
@@ -504,61 +696,130 @@ def _emit_code():
 
     # Reuse Devil Analysis as a blocking, scrollable browser.  Its normal
     # setup and teardown are much safer than maintaining a second list UI.
+    # Summoning is a repeated errand, so a purchase -- or a refusal -- returns
+    # to the browser instead of the Cathedral menu.  Each pass is a complete,
+    # self-contained browser session; only REENTER carries across, and only to
+    # tell the two shared Analysis hooks below to resume the previous sort
+    # order and cursor instead of starting over.  Cancelling ends the loop.
     a.label("compendium")
     compendium_address = a.labels["compendium"]
     a.addiu("sp", "sp", -0x20)
     a.sw("ra", 0x1C, "sp")
     a.sw("s0", 0x18, "sp")
-    _load_addr(a, "s0", FLAG)
+    a.lui("s0", _hi(FLAG))
+    a.sh("zero", _lo(REENTER), "s0")
+    a.label("compendium_open")
+    compendium_open_address = a.labels["compendium_open"]
     a.addiu("v0", "zero", 2)
-    a.sw("v0", 0, "s0")
+    a.sw("v0", _lo(FLAG), "s0")
     # Close the Cathedral event-choice layer and present one clean frame before
     # Devil Analysis captures the Cathedral scene as its background.
     a.jal(EXTRA_CAVE)
-    a.nop()
-    _load_addr(a, "t0", RESULT)
-    a.sw("zero", 0, "t0")
+    a.sw("zero", _lo(RESULT), "s0")
     a.lui("t0", 0x8020)
     a.lhu("v0", -0x2700, "t0")
-    _load_addr(a, "t1", OLD_SELECTION)
-    a.sh("v0", 0, "t1")
     # 0xfb is the system dispatcher's internal Devil Analysis command.  This
     # is deliberately not MENU[6]: that 6 is only the translated label's
     # string-table index, while dispatching command 6 runs an unrelated UI
-    # teardown path and silently returns to the field.
-    a.addiu("v0", "zero", 0xFB)
-    a.sh("v0", -0x2700, "t0")
+    # teardown path and silently returns to the field.  Building it here also
+    # covers the load delay on the command being saved.
+    a.addiu("v1", "zero", 0xFB)
+    a.sh("v0", _lo(OLD_SELECTION), "s0")
+    a.sh("v1", -0x2700, "t0")
     _load_addr(a, "a0", PROMPT)
     a.jal(0)  # fixed to copy_prompt
     prompt_install_call_index = len(a.items) - 1
     a.nop()
     a.jal(0x8007ED40)
     a.nop()
-    _load_addr(a, "a0", ORIGINAL_PROMPT)
+    # Take the chosen sort order with us on the way out: Devil Analysis' own
+    # setup clears it again before the next session could read it, in the one
+    # Cathedral context where that reset applies.  The prompt address covers
+    # the load delay -- storing t1 in the very next slot would write whatever
+    # the browser happened to leave there.
+    a.lui("t0", _hi(ANALYSIS_SORT_SELECTION))
+    a.lhu("t1", _lo(ANALYSIS_SORT_SELECTION), "t0")
+    a.lui("a0", _hi(ORIGINAL_PROMPT))
+    a.sh("t1", _lo(SAVED_SORT), "s0")
+    a.addiu("a0", "a0", _lo(ORIGINAL_PROMPT))
     a.jal(0)  # fixed to copy_prompt
     prompt_restore_call_index = len(a.items) - 1
     a.nop()
+    # Likewise, the base register goes between the command's load and store.
+    a.lhu("v0", _lo(OLD_SELECTION), "s0")
     a.lui("t0", 0x8020)
-    _load_addr(a, "t1", OLD_SELECTION)
-    a.lhu("v0", 0, "t1")
     a.sh("v0", -0x2700, "t0")
     # Retire the contaminated room-dialogue surface before making its updater
     # visible again. This also skips the stock close delay which otherwise
     # exposes copied sort labels before a rejection message is written.
+    # The dialogue helper is a leaf that touches only t0/t1, so the result can
+    # be in flight across it and its load delay costs nothing.
+    a.lw("a0", _lo(RESULT), "s0")
     a.jal(RETIRE_CATHEDRAL_DIALOGUE)
-    a.sw("zero", 0, "s0")
-    _load_addr(a, "t0", RESULT)
-    a.lw("a0", 0, "t0")
-    a.nop()
+    a.sw("zero", _lo(FLAG), "s0")
     a.beq("a0", "zero", "compendium_done")
     a.nop()
     a.jal(0x80056840)
     a.nop()
+    # Let it play out to the player's acknowledgement before anything reopens
+    # over it.  Without this the browser returns on the very next frame and the
+    # message is never seen, while its busy word stays set and turns every
+    # later result into a queued one.
+    a.jal(MESSAGE_PLAYOUT)
+    a.nop()
+    # A result -- purchased, too poor, roster full, level too low, already
+    # held -- means the player was still shopping, so reopen the browser.
+    # selection() already raised REENTER on the way here.
+    a.j(compendium_open_address)
+    a.nop()
     a.label("compendium_done")
+    # Cancelling is the only way out, and it leaves REENTER standing from the
+    # previous pass.  Drop it here so the hooks it gates are stock again for
+    # whatever the player opens next, ordinary Devil Analysis included.
+    a.sh("zero", _lo(REENTER), "s0")
     a.lw("ra", 0x1C, "sp")
     a.lw("s0", 0x18, "sp")
     a.jr("ra")
     a.addiu("sp", "sp", 0x20)
+
+    # Devil Analysis opens on the sort chooser.  a1 already holds that screen's
+    # record when this runs -- it is set in the displaced call's delay slot --
+    # so a Compendium re-entry advances to the neighbouring demon-list record,
+    # and puts the order the player picked back into the sort chooser's cursor
+    # row, which the demon list is about to read.
+    a.label("pick_screen")
+    a.lui("t0", _hi(REENTER))
+    a.lhu("t1", _lo(REENTER), "t0")
+    a.lhu("t2", _lo(SAVED_SORT), "t0")
+    a.beq("t1", "zero", "pick_screen_push")
+    a.lui("t3", _hi(ANALYSIS_SORT_SELECTION))
+    a.sh("t2", _lo(ANALYSIS_SORT_SELECTION), "t3")
+    a.addiu("a1", "a1", ANALYSIS_LIST_SCREEN - ANALYSIS_SORT_SCREEN)
+    a.label("pick_screen_push")
+    a.j(ANALYSIS_SCREEN_PUSH)
+    a.nop()
+
+    # Every Analysis list builder emits a demon when the availability predicate
+    # accepts it OR when Steven's upgrade flag is set.  That second test is the
+    # one which produces the greyed-out rows, so wrapping it hides a race from
+    # the Compendium without disturbing either the shared sort orders or
+    # ordinary Devil Analysis.  s0 addresses the sort order's current entry at
+    # all four call sites.
+    a.label("hidden_race_filter")
+    a.lui("t0", _hi(FLAG))
+    a.lw("t1", _lo(FLAG), "t0")
+    a.lbu("t2", 0, "s0")
+    a.addiu("t3", "zero", 2)
+    a.bne("t1", "t3", "hidden_race_stock")
+    # The branch has already read t3; reuse it as the range scratch.
+    _emit_hidden_lead(a, "t2", "t3")
+    _emit_hidden_test(a, "t2", "t3", "hidden_race_hide", lead=False)
+    a.label("hidden_race_stock")
+    a.j(ANALYSIS_UNKNOWN_ROWS_FLAG)
+    a.nop()
+    a.label("hidden_race_hide")
+    a.jr("ra")
+    a.move("v0", "zero")
 
     # This stock call runs at the end of Devil Analysis' own list-update task,
     # after it has recomputed +0x8e from the scroll offset and visible cursor.
@@ -601,13 +862,14 @@ def _emit_code():
     a.beq("t2", "zero", "migrate_next")
     a.sltiu("t3", "t2", 0xFF)
     a.beq("t3", "zero", "migrate_next")
-    a.nop()
-    _load_addr(a, "t3", DEMON_FLAGS)
+    # The branch has already read t3, so its delay slot can start rebuilding it
+    # as the flag table's base page.
+    a.lui("t3", _hi(DEMON_FLAGS))
     a.addu("t3", "t3", "t2")
-    a.lbu("t4", 0, "t3")
+    a.lbu("t4", _lo(DEMON_FLAGS), "t3")
     a.nop()
     a.ori("t4", "t4", 0x80)
-    a.sb("t4", 0, "t3")
+    a.sb("t4", _lo(DEMON_FLAGS), "t3")
     a.label("migrate_next")
     a.sltiu("t2", "t1", 14)
     a.bne("t2", "zero", "migrate_loop")
@@ -617,17 +879,22 @@ def _emit_code():
 
     # Availability predicate used by the Devil Analysis list builders.
     a.label("availability")
-    _load_addr(a, "t0", FLAG)
-    a.lw("t1", 0, "t0")
+    a.lui("t0", _hi(FLAG))
+    a.lw("t1", _lo(FLAG), "t0")
     a.addiu("t2", "zero", 2)
     a.bne("t1", "t2", "availability_stock")
     a.andi("v0", "a0", 0xFFFF)
     a.sltiu("v1", "v0", 0xFF)
+    # A hidden race can never be granted, so its bit should never be set -- but
+    # bit 7 is shared with the stock Analysis counter, and a save that somehow
+    # carried it would otherwise smuggle the demon back into the browser past
+    # the greyed-row filter.  Deny it here as well and the exclusion is total.
     a.beq("v1", "zero", "availability_false")
-    a.nop()
-    _load_addr(a, "t0", DEMON_FLAGS)
+    _emit_hidden_lead(a, "v0", "t1")
+    _emit_hidden_test(a, "v0", "t1", "availability_false", lead=False)
+    a.lui("t0", _hi(DEMON_FLAGS))
     a.addu("t0", "t0", "v0")
-    a.lbu("v1", 0, "t0")
+    a.lbu("v1", _lo(DEMON_FLAGS), "t0")
     # MOVE fills the load-delay slot; the JR delay then commits the Boolean
     # return value without increasing the routine's size.
     a.move("v0", "zero")
@@ -635,9 +902,8 @@ def _emit_code():
     a.jr("ra")
     a.sltu("v0", "zero", "v1")
     a.label("availability_false")
-    a.move("v0", "zero")
     a.jr("ra")
-    a.nop()
+    a.move("v0", "zero")
     a.label("availability_stock")
     a.addiu("sp", "sp", -0x18)
     a.sw("s0", 0x10, "sp")
@@ -646,19 +912,19 @@ def _emit_code():
 
     # Devil Analysis has one direct pre-scan which bypasses the predicate.
     a.label("initial_scan")
-    _load_addr(a, "t0", FLAG)
-    a.lw("t1", 0, "t0")
+    a.lui("t0", _hi(FLAG))
+    a.lw("t1", _lo(FLAG), "t0")
     a.addiu("t2", "zero", 2)
     a.bne("t1", "t2", "initial_scan_stock")
-    a.nop()
-    _load_addr(a, "t0", DEMON_FLAGS)
+    # Dead on the stock path, which rebuilds its own base.
+    a.lui("t0", _hi(DEMON_FLAGS))
     # Demon ID zero is Satan and is never a valid recruit.  The stock party
     # constructor also uses ID zero while initializing empty UI records, so it
     # must not become the browser's first apparent registration.
     a.addiu("s0", "zero", 1)
     a.label("initial_scan_loop")
     a.addu("t1", "t0", "s0")
-    a.lbu("t2", 0, "t1")
+    a.lbu("t2", _lo(DEMON_FLAGS), "t1")
     # Test the current ID's successor while the byte load settles.  ID 254 is
     # the last valid entry, so a miss there advances s0 to the 0xff sentinel.
     a.sltiu("t3", "s0", 0xFE)
@@ -719,11 +985,21 @@ def _emit_code():
     # The browser prompt states the deterministic price formula.  Errors use
     # existing localized messages and are shown after the browser closes.
     a.label("selection")
-    _load_addr(a, "t0", FLAG)
-    a.lw("t1", 0, "t0")
+    a.lui("t0", _hi(FLAG))
+    a.lw("t1", _lo(FLAG), "t0")
     a.addiu("t2", "zero", 2)
     a.bne("t1", "t2", "selection_stock")
-    a.nop()
+    # The second displaced stock instruction.  Only the stock path reads it --
+    # purchase clobbers a1, and the cancel/close entry below re-executes this
+    # very instruction -- but it fills the delay slot without touching a0, the
+    # selected demon ID.
+    a.addiu("a1", "s3", -0x5C6C)
+    # Raise the re-entry marker before the cleanup below runs: that path also
+    # clears the list window, and holding the marker from here covers both that
+    # reset and the next session's opening one, so the cursor survives intact.
+    # t0 still addresses the cave's state page.
+    a.addiu("t3", "zero", 1)
+    a.sh("t3", _lo(REENTER), "t0")
     # a0 is still the nonnegative demon ID returned by the Analysis UI.  The
     # first overwritten stock instruction would replace it with the UI object
     # pointer, so purchase before entering the browser's normal cancel/close
@@ -733,13 +1009,11 @@ def _emit_code():
     a.jal(0)  # fixed to purchase
     purchase_call_index = len(a.items) - 1
     a.nop()
-    a.addiu("a0", "s4", -0x1C80)
     a.j(0x8007F4F4)
-    a.addiu("a1", "s3", -0x5C6C)
-    a.label("selection_stock")
     a.addiu("a0", "s4", -0x1C80)
+    a.label("selection_stock")
     # Both stock setup instructions were replaced by the two-word hook.
-    a.addiu("a1", "s3", -0x5C6C)
+    a.addiu("a0", "s4", -0x1C80)
     a.j(0x8007F5A4)
     a.nop()
 
@@ -755,13 +1029,13 @@ def _emit_code():
     a.jal(0x801FAB6C)
     a.move("s0", "a0")
     a.bne("v0", "zero", "purchase_duplicate")
-    a.nop()
-    _load_addr(a, "t0", DEMON_BASE_STATS)
+    # Dead when the branch is taken.
+    a.lui("t0", _hi(DEMON_BASE_STATS))
     a.sll("t1", "s0", 5)
     a.addu("t0", "t0", "t1")
-    a.lbu("s1", 0, "t0")
-    _load_addr(a, "t0", PARTY)
-    a.lhu("t1", 0x0E, "t0")
+    a.lbu("s1", _lo(DEMON_BASE_STATS), "t0")
+    a.lui("t0", _hi(PARTY))
+    a.lhu("t1", _lo(PARTY + 0x0E), "t0")
     a.nop()
     a.sltu("t2", "t1", "s1")
     a.bne("t2", "zero", "purchase_level")
@@ -776,21 +1050,21 @@ def _emit_code():
     a.sll("t0", "s2", 4)
     a.sll("t1", "s2", 2)
     a.addu("s2", "t0", "t1")
-    _load_addr(a, "t0", MACCA)
-    a.lw("t1", 0, "t0")
+    a.lui("t0", _hi(MACCA))
+    a.lw("t1", _lo(MACCA), "t0")
     a.nop()
     a.sltu("t2", "t1", "s2")
     # The subtraction result is dead when the branch is taken.
     a.bne("t2", "zero", "purchase_money")
     a.subu("t1", "t1", "s2")
-    a.sw("t1", 0, "t0")
+    a.sw("t1", _lo(MACCA), "t0")
     # The stock grant helper appends at the packed roster tail, so the new
     # record's physical slot is the pre-grant demon count plus the two human
     # slots.  Keep that count in s1 (the base level is no longer needed).
     # MOVE both fills the count byte's load-delay slot and sets the helper's
     # argument inside the call's delay slot.
-    _load_addr(a, "t0", ROSTER_DEMON_COUNT)
-    a.lbu("s1", 0, "t0")
+    a.lui("t0", _hi(ROSTER_DEMON_COUNT))
+    a.lbu("s1", _lo(ROSTER_DEMON_COUNT), "t0")
     a.jal(GRANT_DEMON)
     a.move("a0", "s0")
     # The message token used by 0x60ad indexes the physical roster, including
@@ -804,25 +1078,24 @@ def _emit_code():
     a.move("a0", "s1")
     a.jal(0x801FAAC8)
     a.move("a1", "s0")
-    a.lui("t0", 0x800D)
     # Give the stock cleanup/message path a success result as well.  Besides
     # confirming the purchase, that final message lets the normal renderer
-    # retire the Analysis browser's remaining prompt layer cleanly.
+    # retire the Analysis browser's remaining prompt layer cleanly.  Success
+    # and every rejection differ only in the message they publish, so they
+    # share one store; the last of them simply falls into it.
+    a.j(0)  # fixed to purchase_result
+    purchase_result_jumps = [len(a.items) - 1]
     a.addiu("t1", "zero", 0x60AD)
-    a.sw("t1", RESULT & 0xFFFF, "t0")
-    a.j(0)  # fixed to purchase_done
-    purchase_done_jumps = [len(a.items) - 1]
-    a.nop()
     a.label("purchase_duplicate")
     a.j(0)
-    purchase_done_jumps.append(len(a.items) - 1)
+    purchase_result_jumps.append(len(a.items) - 1)
     # Message 0x0195 has the same authored English wording as 0x005d, but it
     # belongs to a context-selected event tree.  The global system-message
     # renderer used after the Analysis browser resolves 0x005d directly.
     a.addiu("t1", "zero", 0x5D)
     a.label("purchase_level")
     a.j(0)
-    purchase_done_jumps.append(len(a.items) - 1)
+    purchase_result_jumps.append(len(a.items) - 1)
     # Message 0x005b is the stock level-gate rejection ("A pity... You lack
     # the skill to command it.") and, unlike 0x0008, includes WT before ED.
     # Reusing it both states the real reason and lets the player acknowledge
@@ -830,17 +1103,14 @@ def _emit_code():
     a.addiu("t1", "zero", 0x5B)
     a.label("purchase_full")
     a.j(0)
-    purchase_done_jumps.append(len(a.items) - 1)
+    purchase_result_jumps.append(len(a.items) - 1)
     a.addiu("t1", "zero", 0x194)
     a.label("purchase_money")
-    a.j(0)
-    purchase_done_jumps.append(len(a.items) - 1)
     a.addiu("t1", "zero", 0x76)
-    a.label("purchase_error_store")
-    a.lui("t0", 0x800D)
-    a.sw("t1", RESULT & 0xFFFF, "t0")
-    a.label("purchase_done")
-    purchase_done_address = a.labels["purchase_done"]
+    a.label("purchase_result")
+    purchase_result_address = a.labels["purchase_result"]
+    a.lui("t0", _hi(RESULT))
+    a.sw("t1", _lo(RESULT), "t0")
     a.lw("ra", 0x24, "sp")
     a.lw("s0", 0x20, "sp")
     a.lw("s1", 0x1C, "sp")
@@ -858,10 +1128,8 @@ def _emit_code():
     set_jump(prompt_install_call_index, 0x03, copy_prompt_address)
     set_jump(prompt_restore_call_index, 0x03, copy_prompt_address)
     set_jump(purchase_call_index, 0x03, purchase_address)
-    # Success returns directly; errors first store their message ID.
-    set_jump(purchase_done_jumps[0], 0x02, purchase_done_address)
-    for index in purchase_done_jumps[1:]:
-        set_jump(index, 0x02, a.labels["purchase_error_store"])
+    for index in purchase_result_jumps:
+        set_jump(index, 0x02, purchase_result_address)
 
     return a, a.blob()
 
@@ -958,6 +1226,23 @@ def _emit_extra_code():
     a.j(PROMPT_RENDER)
     a.nop()
 
+    # Devil Analysis opens by clearing the list window's scroll offset, cursor
+    # row and absolute index.  On a Compendium re-entry the window still
+    # describes the row the player just summoned from and the demon list is
+    # unchanged, so leaving it alone restores the exact view; the demon-list
+    # screen only repositions the cursor when the entry count differs.
+    a.label("keep_cursor")
+    a.lui("t0", _hi(REENTER))
+    a.lhu("t1", _lo(REENTER), "t0")
+    a.nop()
+    a.bne("t1", "zero", "keep_cursor_done")
+    a.nop()
+    a.j(ANALYSIS_LIST_RESET)
+    a.nop()
+    a.label("keep_cursor_done")
+    a.jr("ra")
+    a.nop()
+
     return a, a.blob()
 
 
@@ -1018,13 +1303,25 @@ def apply(exe, demon_names=None):
         ANALYSIS_LIST_UPDATE_CALL: bytes.fromhex("4d 2f 01 0c 28 d7 65 ac"),
         CATHEDRAL_DIALOGUE_UPDATE_CALL: bytes.fromhex("a4 f9 00 0c 1d 80 12 3c"),
         PROMPT_RENDER_CALL: bytes.fromhex("49 bc 00 0c 48 10 84 24"),
+        # jal 0x8004c84c, with the list window already in a0.
+        0x8007F47C: bytes.fromhex("13 32 01 0c b8 a3 22 ae"),
+        0x8007F568: bytes.fromhex("13 32 01 0c f4 c7 65 ac"),
+        # jal 0x800210a8; addiu a1, a1, -23320 -- the delay slot is what makes
+        # the sort chooser's record the argument this hook shifts.
+        ANALYSIS_SCREEN_PUSH_CALL: bytes.fromhex("2a 84 00 0c e8 a4 a5 24"),
     }
+    # All four Analysis list builders reach Steven's upgrade flag through the
+    # same call; the sort order's cursor is in s0 at each of them.
+    for address in ANALYSIS_UNKNOWN_ROWS_FLAG_CALLS:
+        expected[address] = bytes.fromhex("1b 9c 01 0c 80 c0 85 26")
     for address, data in expected.items():
         _expect(exe, address, data, "unexpected hook instructions")
+    _check_hidden_races(exe)
 
     analysis_records_added = _expand_analysis_sort_tables(exe, demon_names)
 
     asm, code = _emit_code()
+    _check_load_delays(asm, "main cave")
     if CAVE + len(code) > CAVE_CODE_END:
         raise SystemExit(
             f"compendium: code cave overflow ({len(code)} bytes; "
@@ -1033,6 +1330,7 @@ def apply(exe, demon_names=None):
     exe[_foff(CAVE):_foff(CAVE) + len(code)] = code
 
     extra_asm, extra_code = _emit_extra_code()
+    _check_load_delays(extra_asm, "supplemental cave")
     if extra_asm.labels["retire_cathedral_dialogue"] != RETIRE_CATHEDRAL_DIALOGUE:
         raise SystemExit("compendium: Cathedral dialogue helper layout drifted")
     if extra_asm.labels["dynamic_prompt"] != DYNAMIC_PROMPT:
@@ -1082,9 +1380,14 @@ def apply(exe, demon_names=None):
         extra_asm.labels["cathedral_dialogue_update"],
     )
     _patch_call(exe, PROMPT_RENDER_CALL, extra_asm.labels["dynamic_prompt"])
+    for address in ANALYSIS_LIST_RESET_CALLS:
+        _patch_call(exe, address, extra_asm.labels["keep_cursor"])
+    _patch_call(exe, ANALYSIS_SCREEN_PUSH_CALL, labels["pick_screen"])
+    for address in ANALYSIS_UNKNOWN_ROWS_FLAG_CALLS:
+        _patch_call(exe, address, labels["hidden_race_filter"])
 
     # State is static executable padding, not part of the save payload.
-    for address in (FLAG, RESULT, OLD_SELECTION, MENU_COUNT):
+    for address in (FLAG, RESULT, OLD_SELECTION, MENU_COUNT, REENTER):
         struct.pack_into("<I", exe, _foff(address), 0)
 
     return {
@@ -1095,4 +1398,8 @@ def apply(exe, demon_names=None):
         "persistent_bytes_added": 0,
         "save_payload_size": 0x3260,
         "analysis_records_added": analysis_records_added,
+        "hidden_races": tuple(
+            name for _race, name in sorted(COMPENDIUM_HIDDEN_RACES.items())
+        ),
+        "hidden_records": sum(count for _start, count in _hidden_id_ranges()),
     }

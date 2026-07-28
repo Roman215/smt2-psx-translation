@@ -249,6 +249,18 @@ CATHEDRAL_GRID_GLYPHS = {
     0x827e: (0x8263, 2),  # D
     0x8280: (0x8148, 2),  # ?
 }
+# Private 10x10 cells for the compatibility matrix's 10th to 12th column and
+# row labels.  Stock labels each slot with SJIS 0x824f+n, so 1-9 land on the
+# fullwidth digits and 10-12 spill onto 0x8259-0x825b, where Atlus had drawn
+# condensed "10"/"11"/"12" numerals.  Those are eight ink columns wide: fine at
+# the stock 11px matrix pitch, touching at the 8px pitch the widened English
+# RACE/NAME columns need.  _patch_confirm_font also claims those three cells
+# for the stock heavy ＹＥＳ capitals, which is what the matrix ends up
+# displaying.  Label the three slots A/B/C instead -- one character each, and
+# continuing the digits the way hexadecimal does.  These are copies of the
+# stock heavy capitals rather than the compact 5x7 ones, because the stock
+# capitals share the digits' exact ink box and need no recentring.
+CATHEDRAL_INDEX_GLYPHS = {0x829b: "A", 0x829c: "B", 0x829d: "C"}
 # One-byte tokens stored only inside Yamata's marker-prefixed cached name.
 # Both global marker printers translate them to FIELD_NARROW_GLYPHS, allowing
 # the raw and object-compositor paths to share the same compact rendering.
@@ -540,7 +552,35 @@ def kern_font(slpm):
         dst_start = sidx(dst) * W10 * H10
         for k in range(W10 * H10):
             setbit10(dst_start + k, srcbit10(src_start + k))
+
+    # The compatibility matrix's A/B/C slot labels, from the same preserved
+    # stock capitals and likewise kept off every kern/width list.  The matrix
+    # sets an explicit x per cell, so what has to match its digits is the ink
+    # box, not the advance: assert both against the stock '8' rather than trust
+    # it, since a font edit that widened these would make cells touch.
+    digit_ink = _stock_ink_box(srcbit10, sidx(0x8257) * W10 * H10, W10, H10)
+    for dst, src in CATHEDRAL_INDEX_GLYPHS.items():
+        src_start = sidx(0x8260 + ord(src) - 65) * W10 * H10
+        ink = _stock_ink_box(srcbit10, src_start, W10, H10)
+        if ink != digit_ink:
+            raise SystemExit(
+                f"Cathedral matrix label {src!r} does not share the digits' "
+                f"ink box: {ink} != {digit_ink}"
+            )
+        dst_start = sidx(dst) * W10 * H10
+        for k in range(W10 * H10):
+            setbit10(dst_start + k, srcbit10(src_start + k))
     return bytes(exe), widths, widths10
+
+
+def _stock_ink_box(bit, start, width, height):
+    """(min x, max x, min y, max y) of a glyph's set pixels, or None if blank."""
+    lit = [(x, y) for y in range(height) for x in range(width)
+           if bit(start + y * width + x)]
+    if not lit:
+        return None
+    return (min(x for x, _ in lit), max(x for x, _ in lit),
+            min(y for _, y in lit), max(y for _, y in lit))
 
 # ============================ 2. BUILD EXE ============================
 def build_exe(font_slpm, widths, widths10, slpm):
@@ -1725,6 +1765,10 @@ _CATHEDRAL_FIRST_NAME_X = 66
 _CATHEDRAL_FIRST_LEVEL_X = 166
 _CATHEDRAL_RESULT_X = 144
 _CATHEDRAL_RESULT_LEVEL_X = 268
+# Slot labels for the compatibility matrix, shared by its column headers and
+# its leftmost row-number column: 14 four-byte raw-SJIS strings, entry n being
+# 0x824f+n.  Only the Cathedral fusion module reads it, from seventeen sites.
+_CATHEDRAL_INDEX_LABELS = 0x80119104
 _CATHEDRAL_GRID_X = 192
 _CATHEDRAL_GRID_PITCH = 8
 _CATHEDRAL_GRID_COLUMNS = 12
@@ -1946,6 +1990,18 @@ def _patch_cathedral_columns(exe, widths10):
             f"{_CATHEDRAL_GRID_COLUMNS}x{_CATHEDRAL_GRID_PITCH}px -> "
             f"{grid_end}/{_CATHEDRAL_TEXT_SURFACE_WIDTH}px"
         )
+
+    # Slots 10-12 label themselves with the three cells past ９, which the
+    # English build repurposes; give them the private A/B/C copies instead.
+    for slot, code in zip((10, 11, 12), CATHEDRAL_INDEX_GLYPHS):
+        offset = foff(_CATHEDRAL_INDEX_LABELS + slot * 4)
+        expected = struct.pack(">HH", 0x824F + slot, 0)
+        if bytes(exe[offset:offset + 4]) != expected:
+            raise RuntimeError(
+                f"Unexpected Cathedral matrix label for slot {slot}: "
+                f"{bytes(exe[offset:offset + 4]).hex()} != {expected.hex()}"
+            )
+        exe[offset:offset + 4] = struct.pack(">HH", code, 0)
 
     def patch_word(address, expected, replacement, label):
         offset = foff(address)
@@ -3087,7 +3143,10 @@ def main(argv=None):
             "  Demon Compendium: "
             f"{compendium_info['code_bytes']}/{compendium_info['code_capacity']} "
             f"code bytes; {compendium_info['analysis_records_added']} "
-            "stock Analysis omissions added; stock save payload retained"
+            "stock Analysis omissions added; "
+            f"{compendium_info['hidden_records']} unobtainable "
+            f"{'/'.join(compendium_info['hidden_races'])} demons hidden from the "
+            "browser; stock save payload retained"
         )
     NE.apply_name_entry(exe)                 # naming-screen kana grid -> A-Z/a-z/0-9 + specials
     NE.apply_end_button(exe)                 # END button on the Z/z row; no empty-row scrolling

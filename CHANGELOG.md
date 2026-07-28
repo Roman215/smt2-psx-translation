@@ -13,6 +13,38 @@ your own verified source image.
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-07-28
+
+This release reworks the Demon Compendium around what it is actually used for
+(summoning several demons in a row) and corrects a Cathedral interface label,
+five demon names, and two lines of dialogue.
+
+### Changed
+
+- The Demon Compendium now stays open after a summon. Previously every demon
+  cost you the whole journey back: the browser closed, you reopened it from
+  the Cathedral menu, chose a sort order again, and scrolled back down to
+  where you were. Now the result is shown in place (the summon itself, or a
+  refusal such as insufficient Macca, a full party, or a demon above your
+  level), and confirming it returns you to the list on the same demon, under
+  the same sort order. Cancelling still returns to the Cathedral menu.
+- Machine, Vaccine, and Virus demons no longer appear in the Demon Compendium.
+  None of those eleven can be recruited, fused, or otherwise registered, so
+  their rows could never be filled in and only read as gaps in a collection
+  that is in fact complete. They remain listed in ordinary Devil Analysis,
+  which is still where you look up an enemy you are about to fight.
+
+### Fixed
+
+- Labelled the 10th, 11th, and 12th columns and rows of the Cathedral fusion
+  compatibility matrix A, B, and C. They previously read Y, E, and S, which
+  looked like a word rather than a continuation of the numbering.
+- Corrected the demon names Remiel, Baek Yong, Celaeno, Otohime, and Jinn,
+  previously spelled Ramiel, Pek Young, Kelaino, Oto-hime, and Djinn.
+- Capitalized the start of Gabriel's self-introduction in the Elder's scene.
+- Removed a line break that split "We believe in our savior, <name>, so we
+  aren't worried." immediately after the name.
+
 ## [0.1.8] - 2026-07-25
 
 This patch marks the translation as fully playable and corrects several
@@ -311,7 +343,8 @@ First public release.
 - Reproducible build (`build.py`) that patches a verified Japan Rev 1 image
   and emits distributable xdelta patches.
 
-[Unreleased]: https://github.com/Roman215/smt2-psx-translation/compare/v0.1.8...HEAD
+[Unreleased]: https://github.com/Roman215/smt2-psx-translation/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/Roman215/smt2-psx-translation/compare/v0.1.8...v0.2.0
 [0.1.8]: https://github.com/Roman215/smt2-psx-translation/compare/v0.1.7...v0.1.8
 [0.1.7]: https://github.com/Roman215/smt2-psx-translation/compare/v0.1.6...v0.1.7
 [0.1.6]: https://github.com/Roman215/smt2-psx-translation/compare/v0.1.5...v0.1.6
