@@ -29,12 +29,16 @@ import name_entry as NE
 import opening_movie as OM
 import overlay_text as OT
 import compendium as COMP
+import map_marker as MM
 from cdecc import fix_mode2form1
 
 CMDINIT_SECTOR = 67152                        # CMDINIT.BIN base sector in the bin
 RDLOGO_SECTOR = 67181                         # RDLOGO.BIN base sector in the bin
 OVERLAY_FILES = {
     # name: (base sector, byte size, translation function)
+    # 2DMAP carries no text; its patcher installs the alignment-driven marker
+    # rotation and is a no-op unless map_marker.ENABLED is set (enhanced builds).
+    "2DMAP.BIN": (MM.OVERLAY_SECTOR, MM.OVERLAY_SIZE, MM.patch_2dmap),
     "3DMAP.BIN": (67022, 58364, OT.patch_3dmap),
     "CASINO3.BIN": (67078, 33336, OT.patch_casino3),
     "OMAKE.BIN": (67171, 13840, OT.patch_omake),
@@ -2966,6 +2970,9 @@ def _validate_cave_layouts():
             ("Demon Compendium", COMP.CAVE, COMP.CAVE_END),
             ("Demon Compendium price formatter", COMP.EXTRA_CAVE,
              COMP.EXTRA_CAVE_END),
+            # Orphaned by relocate_map_names, which repoints both pointer tables
+            # into the font cave and leaves the stock Japanese block unreferenced.
+            ("map-marker rotation helper", MM.CAVE, MM.CAVE_END),
         ],
     }
 
@@ -3048,6 +3055,8 @@ def main(argv=None):
     args = parser.parse_args(argv)
     _validate_cave_layouts()
     enhancements = not args.no_enhancements
+    # Must be set before the overlay loop below reads OVERLAY_FILES.
+    MM.ENABLED = enhancements
     pyxdelta = require_pyxdelta() if args.xdelta else None
     output_dir = Path(args.output_dir).expanduser()
     if output_dir.exists() and not output_dir.is_dir():
@@ -3138,6 +3147,9 @@ def main(argv=None):
     SS.patch_shop_composed_prompts(exe)      # English item/price confirmation grammar
     SS.patch_composed_prompts(exe)           # one-line "Dismiss <name>?" / "Discard <item>?" confirms
     if enhancements:
+        # Safe only after relocate_map_names has repointed both tables away from
+        # the stock Japanese string block this cave lives in.
+        MM.patch_exe(exe)
         compendium_info = COMP.apply(exe, NT.DEMONS)
         print(
             "  Demon Compendium: "
