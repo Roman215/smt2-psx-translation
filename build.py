@@ -1229,6 +1229,63 @@ def apply_exe_default_names(exe):
                 f"exe default name {i}: {jp!r} not at {PN.EXE_ARRAY + i * PN.ENTRY_SIZE:#x}")
         exe[off:off + PN.ENTRY_SIZE] = PN.entry_bytes(en)
 
+# The new-game party initializer, which also builds the record the ending's
+# clear-data save writes.  It seeds the hero's cached name from a standalone
+# constant with a hardwired seven-byte unaligned copy, then sets his starting
+# level.  Seven bytes is exactly ホーク plus its terminator; ＨＡＷＫ needs eight
+# and a terminator of its own, so the copy is rebuilt to move two aligned words
+# and store the NUL itself.  Everything else here -- including the level at
+# record+0xe, which is 6 and is NOT a name length -- is left alone.
+_HERO_INIT_SOURCE = 0x800261C8         # lui v1, 0x8001 / addiu t1, v1, 0xb78
+_HERO_INIT_DEST = 0x800261D0           # addiu t0, v0, -0x36fb  (record + 0x5d)
+_HERO_INIT_COPY = 0x800261D4           # ten instructions of unaligned byte moves
+_HERO_INIT_SETUP = (0x3C038001, 0x24690B78, 0x2448C905)
+_HERO_INIT_STOCK = (
+    0x89260003, 0x99260000, 0x81270004, 0xA9060003, 0xB9060000,
+    0xA1070004, 0x81260005, 0x81270006, 0xA1060005, 0xA1070006,
+)
+
+
+def apply_exe_default_hero_name(exe):
+    """Translate the initializer's own copy of the hero name, and widen its copy."""
+    setup = struct.unpack_from("<3I", exe, foff(_HERO_INIT_SOURCE))
+    if setup != _HERO_INIT_SETUP:
+        raise SystemExit(
+            "unexpected new-game name initializer at "
+            f"0x{_HERO_INIT_SOURCE:08x}: "
+            + ", ".join(f"0x{word:08x}" for word in setup)
+        )
+    stock = struct.unpack_from("<10I", exe, foff(_HERO_INIT_COPY))
+    if stock != _HERO_INIT_STOCK:
+        raise SystemExit(
+            f"unexpected hero-name copy at 0x{_HERO_INIT_COPY:08x}: "
+            + ", ".join(f"0x{word:08x}" for word in stock)
+        )
+    name_off = foff(PN.DEFAULT_NAME_CONST)
+    expected = PN.stock_bytes(PN.DEFAULT_NAME_STOCK)
+    if bytes(exe[name_off:name_off + len(expected)]) != expected:
+        raise SystemExit(
+            f"default hero name {PN.DEFAULT_NAME_STOCK!r} is not at "
+            f"0x{PN.DEFAULT_NAME_CONST:08x}"
+        )
+    exe[name_off:name_off + PN.DEFAULT_NAME_SIZE] = PN.default_name_bytes()
+
+    ZERO, A2, A3, T0, T1 = 0, 6, 7, 8, 9
+    def load_store(op, rt, off, rs):
+        return ((op & 0x3F) << 26) | ((rs & 0x1F) << 21) | ((rt & 0x1F) << 16) | (off & 0xFFFF)
+    LW, SB, SWL, SWR = 0x23, 0x28, 0x2A, 0x2E
+    struct.pack_into(
+        "<10I", exe, foff(_HERO_INIT_COPY),
+        load_store(LW, A2, 0, T1),          # the constant is word-aligned...
+        load_store(LW, A3, 4, T1),
+        load_store(SB, ZERO, 8, T0),        # ...the record's name field is not
+        load_store(SWL, A2, 3, T0),
+        load_store(SWR, A2, 0, T0),
+        load_store(SWL, A3, 7, T0),
+        load_store(SWR, A3, 4, T0),
+        0, 0, 0,
+    )
+
 # ---- Marker-based one-byte system-string printer ---------------------------------------
 # Strings beginning with 0x1f contain one-byte English.  Each byte is mapped back to its
 # fullwidth SJIS glyph in a temporary two-byte buffer and drawn by the original blitter.
@@ -3109,13 +3166,16 @@ def main(argv=None):
     packa0 = extract_from_bin(bind, 68191, PACKA_SIZE)
     cmdinit0 = extract_from_bin(bind, CMDINIT_SECTOR, CMDINIT_SIZE)
     rdlogo0 = extract_from_bin(bind, RDLOGO_SECTOR, RDLOGO_SIZE)
+    print("[2/7] kerning font...")
+    font_slpm, widths, widths10 = kern_font(slpm)
+    _validate_spell_description_widths(widths)
+    # Overlays are patched after kerning: the bonus viewer sizes its demon name
+    # plate from the 10x10 proportional widths this produced.
+    OT.configure(widths10=widths10, enhancements=enhancements)
     overlay_files = {}
     for name, (base_sector, size, patcher) in OVERLAY_FILES.items():
         original = extract_from_bin(bind, base_sector, size)
         overlay_files[name] = (base_sector, patcher(original), original)
-    print("[2/7] kerning font...")
-    font_slpm, widths, widths10 = kern_font(slpm)
-    _validate_spell_description_widths(widths)
     movies = build_movies(
         input_bin,
         font_slpm,
@@ -3151,6 +3211,8 @@ def main(argv=None):
     cmdinit = bytearray(cmdinit0)
     apply_cmdinit_names(cmdinit)             # REAL new-game party names (CMDINIT.BIN)
     apply_exe_default_names(exe)             # ...and the exe's copy, which serves slot 6 (Aleph)
+    apply_exe_default_hero_name(exe)         # ...and the new-game initializer's own constant,
+                                             # which is what the clear-data save records
     map_name_caves = MN.COMPENDIUM_CAVES if enhancements else MN.CAVES
     MN.relocate_map_names(exe, map_name_caves)  # field/location names (save list) -> English, relocated
                                              # to the rodata cave + both pointer tables repointed

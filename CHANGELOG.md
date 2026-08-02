@@ -13,6 +13,54 @@ your own verified source image.
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-08-02
+
+This patch repairs the Devil Analysis roll that plays after the ending, where
+nearly every demon was labelled with a different demon's name and the race
+beside it came out as stray symbols. The same mistake was quietly spoiling the
+casino's demon list, and the same screen's DEFEAT tally was inflated by the
+Demon Compendium. Saving clear data after the ending also no longer files the
+save under the Japanese hero name.
+
+No save data has to be migrated. An existing save shows the corrected screens
+as soon as the patch is applied, and a clear file written before it still
+loads with the hero's English name.
+
+### Changed
+
+- The name plate on the Devil Analysis roll is drawn in the same compact
+  lettering the Cathedral and party lists use, and it now grows to fit the text
+  it actually has to show. It used to be sized from a count of Japanese
+  characters that no longer had anything to do with the English name beside it,
+  so the longest pairings ran past the edge of the plate. The widest of them,
+  Drake Yamata-no-Orochi and Femme Cailleach Bheare, now sit inside it with
+  even margins.
+
+### Fixed
+
+- The Devil Analysis roll after the ending named the wrong demon on nearly
+  every entry, and printed its race as one or two stray symbols. That screen
+  carries its own private copies of the race and demon name lists, and the
+  translation was rebuilding the lookups into them against an address 248 bytes
+  away from where the game really loads the screen — so an entry pointed at
+  whatever text happened to sit at the old spot, and races landed in the middle
+  of a name. The casino's private demon list was built from the same mistake
+  and was wrong in the same way; both are correct now, and the build fails
+  outright if either list is ever rebuilt against the wrong address again.
+- The DEFEAT tally on that screen no longer counts the Demon Compendium's
+  registration mark. The Compendium records "this demon is registered" in a
+  spare bit of the very byte the game counts defeats in, so a demon you had
+  only ever fused claimed 128 defeats, and one you had actually beaten eighteen
+  times claimed 146. The tally now reads 0 through 127 and counts only real
+  victories. Builds made with `--no-enhancements` have no Compendium and are
+  left exactly as they were.
+- Saving clear data after the ending no longer files the save under ホーク.
+  When the game sets up that record it takes the hero's name from a constant of
+  its own, separate from the two name templates translated in 0.2.1 — a normal
+  new game overwrites it a moment later, but the clear-data save records it
+  as-is. Clear files written before this patch already gave the hero his
+  English name back when loaded, and re-saving repairs the entry in the list.
+
 ## [0.2.1] - 2026-08-02
 
 This patch repairs the hero's name at the reveal scene, gives the overhead map
@@ -404,7 +452,8 @@ First public release.
 - Reproducible build (`build.py`) that patches a verified Japan Rev 1 image
   and emits distributable xdelta patches.
 
-[Unreleased]: https://github.com/Roman215/smt2-psx-translation/compare/v0.2.1...HEAD
+[Unreleased]: https://github.com/Roman215/smt2-psx-translation/compare/v0.2.2...HEAD
+[0.2.2]: https://github.com/Roman215/smt2-psx-translation/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/Roman215/smt2-psx-translation/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/Roman215/smt2-psx-translation/compare/v0.1.8...v0.2.0
 [0.1.8]: https://github.com/Roman215/smt2-psx-translation/compare/v0.1.7...v0.1.8

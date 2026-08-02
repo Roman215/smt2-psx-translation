@@ -15,6 +15,14 @@ katakana: v0.2.0 printed "Your name is Aleph..." and then renamed the hero to
 Slot order matches the game's index: 0 Hawk (the hero's Colosseum name, the one
 the naming screen offers first), 1 Hiroko, 2..5 the Center's four fighters, and
 6 Aleph.
+
+There is a *third* copy of slot 0, and it is not part of either template: the
+new-game party initializer at 0x800261c8 copies a standalone constant straight
+into the live party record's cached name.  A normal new game immediately
+overwrites that with the template, which is why translating the templates alone
+looked complete -- but the clear-data save the ending offers writes its record
+from the initializer without ever running the template copy, so the constant is
+what lands in the save-file list.  DEFAULT_NAME_CONST below is that copy.
 """
 
 import sys
@@ -56,4 +64,27 @@ def entry_bytes(english):
 
 def stock_bytes(japanese):
     return japanese.encode("shift_jis")
+
+
+# The standalone slot-0 constant used by the new-game party initializer.  Its
+# eight bytes are all there is: 0x80010b80 begins the "bu00:" memory-card path,
+# which must never move.  Stock stores ホーク plus the two padding NULs and
+# copies seven bytes; the English name fills all eight, so the widened copy in
+# build.py has to write the terminator itself.
+DEFAULT_NAME_CONST = 0x80010B78
+DEFAULT_NAME_SIZE = 8
+DEFAULT_NAME_STOCK = "ホーク"
+
+
+def default_name_bytes():
+    """The initializer's slot-0 constant: fullwidth name, NUL-padded, no room to spare."""
+    english = NAMES[0][0]
+    data = b"".join(bytes((ET.fullwidth(c) >> 8, ET.fullwidth(c) & 0xFF))
+                    for c in english)
+    if len(data) > DEFAULT_NAME_SIZE:
+        raise SystemExit(
+            f"default hero name {english!r} needs {len(data)} bytes; the "
+            f"initializer constant holds {DEFAULT_NAME_SIZE}"
+        )
+    return data.ljust(DEFAULT_NAME_SIZE, b"\0")
 
