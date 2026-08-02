@@ -24,6 +24,7 @@ from pathlib import Path
 sys.path.insert(0, "tools")
 import build_en_tree as ET, block_rebuild as BR, build_prod_exe as BP, translate_pipeline as TP
 import name_tables as NT, translations as TR, menu_table as MT, sys_strings as SS
+import party_names as PN
 import rdlogo as RD, map_names as MN, status_screen as STATUS
 import name_entry as NE
 import opening_movie as OM
@@ -92,19 +93,23 @@ AB_DICT_BUDGET = 4608
 def dictionary_corpus_texts():
     # Keep mining driven by the fixed-size C/D banks. A/B text may reuse the
     # resulting entries, but must not displace entries that keep bank 0 viable.
+    # Bank 0 is the tightest C/D allocation, so count its authored text twice:
+    # this spends the fixed runtime dictionary budget where it creates usable
+    # headroom instead of maximizing aggregate savings in roomier banks.
     parts = []
     for message_id, author in TR.TRANS.items():
-        if message_id >> 12 not in {0,1,2,3,6,7}:
+        bank = message_id >> 12
+        if bank not in {0,1,2,3,6,7}:
             continue
         for part in author:
             if not isinstance(part, str):
                 continue
             if part in TP.CTRL_NAME:
-                suffix = TP.CONTROL_SUFFIX.get(part)
-                if suffix:
-                    parts.append(suffix)
+                text = TP.CONTROL_SUFFIX.get(part)
             else:
-                parts.append(part)
+                text = part
+            if text:
+                parts.extend([text] * (2 if bank == 0 else 1))
     return parts
 
 def ab_corpus_texts():
@@ -1197,24 +1202,32 @@ def _apply_lowercase_font(exe):
 # ホーク=Hawk (hero's Colosseum/amnesiac name), アレフ=Aleph (his true name, revealed later),
 # ヒロコ=Hiroko (heroine); ベス/ギメル/ダレス/ザイン = Hebrew letters.
 CMDINIT_NAMES = {
-    0x558: "Hawk",    # ホーク
-    0x569: "Hiroko",  # ヒロコ
-    0x57a: "Beth",    # ベス
-    0x58b: "Gimel",   # ギメル
-    0x59c: "Daleth",  # ダレス
-    0x5ad: "Zayin",   # ザイン
-    0x5be: "Aleph",   # アレフ
+    PN.CMDINIT_BASE + i * PN.ENTRY_SIZE: en
+    for i, en in enumerate(PN.ENGLISH)
 }
 def apply_cmdinit_names(cmdinit, names=None):
     """Patch the new-game default party-name template in CMDINIT.BIN (loaded to RAM, feeds the
-    runtime name array 0x8020bd4c). Each entry is 17 bytes: fullwidth Latin name + NUL pad."""
+    runtime name array 0x801fbd4c). Each entry is 17 bytes: fullwidth Latin name + NUL pad."""
     names = names or CMDINIT_NAMES
     for off, en in names.items():
-        data = b"".join(struct.pack(">H", ET.fullwidth(c)) for c in en)
-        if len(data) > 16:
-            raise SystemExit(f"CMDINIT name too long for 17-byte entry: {en!r}")
-        for i in range(17):
-            cmdinit[off + i] = data[i] if i < len(data) else 0
+        cmdinit[off:off + PN.ENTRY_SIZE] = PN.entry_bytes(en)
+
+def apply_exe_default_names(exe):
+    """Patch the same 7-name template in the exe's own copy of the array (0x801fbd4c).
+
+    CMDINIT.BIN only re-initializes slots 0-5 at new-game time, so slot 6 (アレフ)
+    is served straight out of exe data.  The reveal event copies slot 6 over slot 0
+    (0x80061fbc / 0x80060d54), which is how a translated "Your name is Aleph..."
+    was still followed by a katakana party name in v0.2.0.  Patching all seven slots
+    keeps the two templates identical no matter which one a given slot is served
+    from.  See tools/party_names.py."""
+    for i, (en, jp) in enumerate(PN.NAMES):
+        off = foff(PN.EXE_ARRAY + i * PN.ENTRY_SIZE)
+        stock = PN.stock_bytes(jp)
+        if bytes(exe[off:off + len(stock)]) != stock:
+            raise SystemExit(
+                f"exe default name {i}: {jp!r} not at {PN.EXE_ARRAY + i * PN.ENTRY_SIZE:#x}")
+        exe[off:off + PN.ENTRY_SIZE] = PN.entry_bytes(en)
 
 # ---- Marker-based one-byte system-string printer ---------------------------------------
 # Strings beginning with 0x1f contain one-byte English.  Each byte is mapped back to its
@@ -3072,7 +3085,7 @@ def main(argv=None):
     print(
         f"  dictionary: {len(dictionary)} entries, "
         f"{dictionary_bytes}/{BP.DICT_RUNTIME_BUDGET} bytes, "
-        f"~{estimated_nibbles / 2 / 1024:.1f} KB saved"
+        f"~{estimated_nibbles / 2 / 1024:.1f} KB weighted mining score"
     )
     # A/B-local dictionary: mined from the negotiation/battle corpus.  Entries
     # already in the shared dictionary compress through their shared codes.
@@ -3137,6 +3150,7 @@ def main(argv=None):
     apply_name_tables(exe, slpm, PATHS, widths10)
     cmdinit = bytearray(cmdinit0)
     apply_cmdinit_names(cmdinit)             # REAL new-game party names (CMDINIT.BIN)
+    apply_exe_default_names(exe)             # ...and the exe's copy, which serves slot 6 (Aleph)
     map_name_caves = MN.COMPENDIUM_CAVES if enhancements else MN.CAVES
     MN.relocate_map_names(exe, map_name_caves)  # field/location names (save list) -> English, relocated
                                              # to the rodata cave + both pointer tables repointed

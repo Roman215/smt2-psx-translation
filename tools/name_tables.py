@@ -35,8 +35,8 @@ DEMONS = [
  "Doppelganger","Black Ooze","Chris the Car","Jack the Ripper","Slime","Andromeda","Spider","Moebius",
  "--------","Red Bear","Mercurius","Basilisk","King Frost","Demi-Nandi","Betelgeuse","Daleth","Janus",
  "Zayin","Daleth","Baphomet","Sarutahiko","Daleth","Belphegor","Gimmel","Uriel","Raphael","Michael",
- "Lucifuge","Hecate","Atavaka","Master Therion","Abaddon","Astaroth","Kumbhira","Vajra","Mihira","Antila",
- "Majira","Santira","Indara","Pajra","Makura","Sindura","Catura","Vikarala","Tiamat","Virocana","Mara",
+ "Lucifuge","Hecate","Atavaka","Master Therion","Abaddon","Astaroth","Kumbhira","Vajra","Mihira","Andira",
+ "Majira","Sandira","Indara","Pajra","Makura","Sindura","Catura","Vikarala","Tiamat","Virocana","Mara",
  "Lucifer","Kuzuryu","Sabaoth","Shaddai","Elohim","Satan","YHVH","YHVH","Beelzebub","Alice","Ghost Q",
  "Sage of Time","Hell Biker","Matador","Gabriel","Gomory",
 ]

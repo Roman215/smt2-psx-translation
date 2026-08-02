@@ -442,7 +442,7 @@ AUDITED_SYSTEM_TEXT = {
     # Missed short error and the remainder of the System/Config help tables.
     # (0x17bc/0x1b8c, the composed-confirm suffixes, are rebuilt by
     # patch_composed_prompts.)
-    0x1964: "Short on cash",
+    0x1964: "Not enough ћ.",
     0x2314: "Items",
     0x231c: "Spirits",
     0x2c40: "Analyze defeated demons.",
@@ -496,10 +496,10 @@ AUDITED_SYSTEM_TEXT = {
     0x2f68: "Res All",        # 全対応
     0x3068: "Sorry... Your level is too low.",
     # Fusion result versus player; the stock text warns it cannot be summoned.
-    0x3094: "Its alignment differs from yours. Fuse anyway?",
-    0x30d4: "Your item bag is full.",
+    0x3094: "Its alignment differs. You cannot summon it. Proceed anyway?",
+    0x30d4: "Your inventory is full.",
     0x30f0: "That demon is with you.",
-    0x310c: "Sorry. The fusion failed.",
+    0x310c: "Sorry. Not the demon you expected.",
     0x31d0: "Battle settings.",
     0x31e4: "Effect settings.",
     0x3200: "Message speed settings.",
@@ -564,7 +564,7 @@ AUDITED_SYSTEM_TEXT = {
     0x5620: "Whom shall we revive?",
     0x563c: "Whom shall we treat?",
     0x5658: "Whom shall we restore?",
-    0x5674: "Need more cash",
+    0x5674: "Not enough ћ!",
 
     # Shop transaction text. Several shopkeeper personalities share the same
     # mechanics but retain distinct registers in their greetings and replies.
@@ -601,7 +601,7 @@ AUDITED_SYSTEM_TEXT = {
     0x5908: "Total is... OK?",
     0x591c: "How many?",
     0x5930: "Thanks a bunch!",
-    0x5944: "Selling what?",
+    0x5944: "Whatcha selling?",
     0x5958: "I can't buy anything you have. Sorry.",
     0x5984: "So, what will you buy?",
     0x59a0: "Junk Shop: Step right up!",
@@ -616,14 +616,14 @@ AUDITED_SYSTEM_TEXT = {
     0x5a74: "Armor Shop: Need something tough?",
 
     0x5a98: "Can't equip it. Still buy?",
-    0x5ab4: "You're unfit to shop. Come back later.",
+    0x5ab4: "You can't shop now. Come back later.",
     0x5ae0: "You can't carry more cash.",
     0x5b00: "Inventory is full.",
     0x5b18: "Total okay?",
     0x5b2c: "Thanks. Come again.",
     0x5b44: "Got something to sell?",
     0x5b60: "Nothing I can buy. Bring me something good next time.",
-    0x5b9c: "All fine weapons here.",
+    0x5b9c: "All are fine weapons.",
     0x5bb4: "Weapon Shop: Good gear",
 
     0x5bcc: "Can't equip it. Still purchase?",
@@ -666,7 +666,7 @@ AUDITED_SYSTEM_TEXT = {
 
     0x5fec: "Can't equip it. Still buy?",
     0x6008: "No shopping until you heal up.",
-    0x602c: "No more cash. Don't be greedy.",
+    0x602c: "Macca's maxed out. Don't be greedy.",
     0x6054: "Not enough cash. Bring more.",
     0x607c: "Bag's full. Don't be greedy.",
     0x609c: "Equip it now?",
@@ -702,7 +702,7 @@ AUDITED_SYSTEM_TEXT = {
     0x6350: "What are you selling me?",
     0x636c: "Nothing I can buy. Bring me goods.",
     0x6394: "What will you buy?",
-    0x63a8: "Junk Shop: Need something?",
+    0x63a8: "Junk Shop: You buying?",
 
     0x63c4: "Can't equip it. Still want it?",
     0x63e8: "You can't shop right now.",

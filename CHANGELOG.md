@@ -13,6 +13,67 @@ your own verified source image.
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-08-02
+
+This patch repairs the hero's name at the reveal scene, gives the overhead map
+marker the series' alignment-driven spin, and revises around 150 lines of
+dialogue against the Japanese script — most of them demon negotiation.
+
+### Added
+
+- The player marker on the 2D overhead map now turns according to your
+  alignment, as it does elsewhere in the series: clockwise for Law,
+  counter-clockwise for Chaos, and a Neutral zig-zag that rocks around the
+  sideways frame without ever turning past it. It reads the same alignment
+  value the game itself uses, so the spin changes as your alignment shifts.
+  Like the Demon Compendium this is a gameplay enhancement, and
+  `--no-enhancements` leaves the map exactly as it was.
+
+### Changed
+
+- Revised roughly 150 lines of dialogue against the Japanese script. Most are
+  demon negotiation exchanges, which now read as spoken lines instead of
+  literal glosses and no longer collapse several distinct demon replies into
+  one repeated phrase. The rest cover the Underworld and endgame scenes —
+  the offer made after the Astaroth ambush and the plea to refuse it, YHVH's
+  judgment, Ozawa, the appeal to stop Kuzuryu — plus battle and negotiation
+  status messages.
+- Renamed the stat called Wisdom in dialogue to Intelligence, matching the
+  status screen and the shop comparison panel. It appears in the Chokmah Tower
+  guardian's test, the message left outside the sealed watchtower door, and
+  the rumor about the Factory's signal.
+- Money messages now use the game's Macca symbol rather than the word "cash",
+  so "Short on cash" and "Need more cash" read as "Not enough ћ", and the
+  carrying-limit refusal reads "Macca's maxed out."
+- Retitled the well-dressed Valhalla informant from "Dandy" to "Dapper Man",
+  and gave Louis Cyphre his full name on the speaker label after the Astaroth
+  impersonation.
+- Reworked the casino's Keno pun so it lands in English: the game is spelled
+  KENO but pronounced KINO, which the previous wording lost.
+- Item pickups now read `Obtained "<item>" x3` instead of
+  `Obtained 3 of "<item>"`.
+- Gave the shopkeepers back some of their individual register — the junk
+  dealer, weapon smith, and armorer no longer share the same flat phrasing —
+  and reworded a handful of menu strings, including "Your item bag is full"
+  to "Your inventory is full".
+
+### Fixed
+
+- The name-reveal scene now renames the hero to Aleph instead of アレフ. The
+  game keeps its party-name template in two places and re-initializes only the
+  first six of its seven slots from `CMDINIT.BIN`; the seventh, the hero's true
+  name, is served from the executable's own copy, which had never been
+  translated. Saves already past that scene keep the katakana name — the
+  release notes carry GameShark codes that repair one.
+- Restored the Cathedral's warning that a fusion result whose alignment differs
+  from yours cannot be summoned. The prompt previously only noted the
+  mismatch, so the demon could be lost without warning.
+- Corrected the Cathedral's fusion-accident message, which read "Sorry. The
+  fusion failed." although the fusion succeeds — it simply produces a demon
+  other than the one predicted.
+- Corrected the demon names Andira and Sandira, previously spelled Antila and
+  Santira.
+
 ## [0.2.0] - 2026-07-28
 
 This release reworks the Demon Compendium around what it is actually used for
@@ -343,7 +404,8 @@ First public release.
 - Reproducible build (`build.py`) that patches a verified Japan Rev 1 image
   and emits distributable xdelta patches.
 
-[Unreleased]: https://github.com/Roman215/smt2-psx-translation/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/Roman215/smt2-psx-translation/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/Roman215/smt2-psx-translation/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/Roman215/smt2-psx-translation/compare/v0.1.8...v0.2.0
 [0.1.8]: https://github.com/Roman215/smt2-psx-translation/compare/v0.1.7...v0.1.8
 [0.1.7]: https://github.com/Roman215/smt2-psx-translation/compare/v0.1.6...v0.1.7

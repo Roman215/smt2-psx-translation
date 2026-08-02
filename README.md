@@ -104,9 +104,10 @@ python -m pip install pyxdelta
 
 ### Gameplay enhancements
 
-The default build includes modern gameplay enhancements, currently the
-**Demon Compendium** at the Cathedral of Shadows. To build the translation
-with the original gameplay mechanics instead, pass the general opt-out flag:
+The default build includes modern gameplay enhancements: the **Demon
+Compendium** at the Cathedral of Shadows, and **alignment-driven rotation** for
+the overhead map marker. To build the translation with the original gameplay
+mechanics instead, pass the general opt-out flag:
 
 ```powershell
 python build.py --no-enhancements
@@ -125,7 +126,7 @@ Compendium itself. Newly negotiated demons are registered when they are added
 to the party, so abandoning one before visiting the Cathedral does not remove
 its record.
 
-The enhancement does not enlarge or rewrite the game's save structure. Its
+The Compendium does not enlarge or rewrite the game's save structure. Its
 registration flags reuse the high bit of an existing saved per-demon counter,
 so the original payload size and memory-card checksum process stay unchanged.
 Existing saves can be loaded, but keep a backup or a separate memory card for
@@ -134,6 +135,14 @@ the reused counter appear 128 higher. Conversely, a pre-existing save where a
 particular demon's counter has already reached 128 may initially treat that
 demon as registered. `build.py` never opens or modifies save states or
 memory-card files.
+
+The map marker rotation replaces the fixed spin of the seven-frame player
+sprite on the 2D overhead map with one that reads the same alignment value the
+game uses elsewhere: clockwise for Law, counter-clockwise for Chaos, and a
+Neutral zig-zag that rocks around the sideways frame without turning past it.
+It touches only `2DMAP.BIN` and a helper in unreferenced executable space, and
+saves are unaffected either way. With `--no-enhancements`, `2DMAP.BIN` is left
+byte-identical to the original.
 
 The matching CUE can be copied or renamed to refer to the generated BIN. If
 you create an xdelta for distribution, it must be applied to the same verified
@@ -158,6 +167,8 @@ push that no game data is tracked in the repository.
 - `tools/translations.py` — dialogue translation source.
 - `tools/name_tables.py`, `menu_table.py`, `sys_strings.py`, and `map_names.py`
   — English UI, terminology, and location data.
+- `tools/party_names.py` — the default party names, written into both places the
+  game stores them.
 - `tools/block_rebuild.py`, `build_en_tree.py`, `build_prod_exe.py`, `cdecc.py`,
   and `rdlogo.py` — codec and binary-patching support used by the build.
 - `tools/dump_full_script.py` — optional developer utility that dumps the
@@ -167,6 +178,8 @@ push that no game data is tracked in the repository.
   with translated text.
 - `tools/compendium.py` installs the default Cathedral Compendium enhancement
   and its save-compatible registration flags; `--no-enhancements` skips it.
+- `tools/map_marker.py` installs the alignment-driven 2D-map marker rotation;
+  `--no-enhancements` skips it.
 
 ## Developer utility
 
