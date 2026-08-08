@@ -870,6 +870,441 @@ def _patch_line_break_guard(exe, w32):
     w32(LINE_BREAK_FN+4, NOP)
 
 
+# ---- Circle-to-complete dialogue -----------------------------------------------------
+# relocate_map_names repoints every live name in the stock 0x80016124..0x80016c6c
+# block except the two deliberately preserved entries at 0x800168cc/0x800168d0.
+# The ranges below stay clear of those entries and hold two small wrappers plus a
+# private accumulation buffer.  Install this patch only *after* relocation.
+INSTANT_TEXT_CAVE = 0x80016408
+INSTANT_TEXT_CAVE_END = 0x800168cc
+INSTANT_TEXT_LATCH = 0x800168e4
+INSTANT_TEXT_BUFFER = 0x800168e8
+INSTANT_TEXT_BUFFER_SIZE = 0x100
+
+
+def _patch_instant_text(exe):
+    """Let Circle finish the currently typing story or battle text box.
+
+    The story and battle paths share the Huffman decoder but consume its output
+    differently: story text draws a glyph immediately, while battle text returns
+    a NUL-terminated draw fragment.  The wrappers therefore share button/control
+    handling but keep separate bounded fast paths.  Both stop before a control
+    token; harmless controls (line breaks and dynamic inserts) run normally on
+    the next frame and retain the latch, while WT/PG/ED end the current box and
+    clear it.  This prevents the completing Circle press from also advancing.
+    """
+    ZERO, AT, V0, V1, A0, A1, T0, T1, T2, T3, T4, SP, RA = (
+        0, 1, 2, 3, 4, 5, 8, 9, 10, 11, 12, 29, 31
+    )
+    NOP = 0
+    PAD_PRESS = 0x801277e0
+    STORY_BUSY = 0x801d1749
+    BATTLE_STREAM = 0x801d1748
+    MESSAGE_ACTIVE = 0x801fc370
+    GAME_MODE = 0x801fd8fc
+    MESSAGE_PTR = 0x801d13b4
+    NIBBLE_STATE = 0x801d15db
+    CONTROL = 0x801d15dc
+    SYMBOL = 0x801d15de
+    TEXT_TIMER = 0x801d185c
+    TEXT_SPEED = 0x801fc868
+    DRAW_BUFFER = 0x801fd598
+    STOCK_DECODE = 0x80057fe4
+    STOCK_STORY_RENDER = 0x80058110
+    STOCK_BATTLE_STEP = 0x80051f3c
+    CIRCLE = 0x20                 # Psy-Q PADRright / the game's confirm button
+    WT, PG, ED = 0x5754, 0x5047, 0x4544
+
+    # Tie the runtime address to the stock controller updater instead of
+    # trusting the similar-looking 0x8011xxxx data range beside it.
+    for address, expected in (
+        (0x80020fa4, 0x3c038012),  # lui v1,0x8012
+        (0x80020fac, 0xac6277e0),  # sw  v0,0x77e0(v1): pad-1 new presses
+    ):
+        found = struct.unpack_from("<I", exe, foff(address))[0]
+        if found != expected:
+            raise SystemExit(
+                f"instant-text pad source {address:#x}: "
+                f"{found:#010x} != {expected:#010x}"
+            )
+
+    RI = lambda op, rs, rt, imm: (
+        ((op & 0x3f) << 26) | ((rs & 0x1f) << 21) |
+        ((rt & 0x1f) << 16) | (imm & 0xffff)
+    )
+    RR = lambda rs, rt, rd, sa, fn: (
+        ((rs & 0x1f) << 21) | ((rt & 0x1f) << 16) |
+        ((rd & 0x1f) << 11) | ((sa & 0x1f) << 6) | (fn & 0x3f)
+    )
+    ADDIU = lambda rt, rs, imm: RI(0x09, rs, rt, imm)
+    SLTIU = lambda rt, rs, imm: RI(0x0b, rs, rt, imm)
+    ANDI = lambda rt, rs, imm: RI(0x0c, rs, rt, imm)
+    ORI = lambda rt, rs, imm: RI(0x0d, rs, rt, imm)
+    LUI = lambda rt, imm: RI(0x0f, ZERO, rt, imm)
+    LW = lambda rt, off, rs: RI(0x23, rs, rt, off)
+    LBU = lambda rt, off, rs: RI(0x24, rs, rt, off)
+    LHU = lambda rt, off, rs: RI(0x25, rs, rt, off)
+    SB = lambda rt, off, rs: RI(0x28, rs, rt, off)
+    SW = lambda rt, off, rs: RI(0x2b, rs, rt, off)
+    ADDU = lambda rd, rs, rt: RR(rs, rt, rd, 0, 0x21)
+    SLL = lambda rd, rt, sa: RR(ZERO, rt, rd, sa, 0)
+    SRL = lambda rd, rt, sa: RR(ZERO, rt, rd, sa, 2)
+    JR = lambda rs: RR(rs, ZERO, ZERO, 0, 8)
+    JAL = lambda target: (0x03 << 26) | ((target >> 2) & 0x03ffffff)
+    hi = lambda address: (
+        ((address >> 16) + (1 if address & 0x8000 else 0)) & 0xffff
+    )
+    lo = lambda address: address & 0xffff
+
+    words = []
+    labels = {}
+    fixups = []
+
+    def mark(name):
+        if name in labels:
+            raise AssertionError(f"duplicate instant-text label {name}")
+        labels[name] = len(words)
+
+    def emit(*items):
+        words.extend(items)
+
+    def branch(op, rs, rt, label):
+        fixups.append((len(words), "branch", op, rs, rt, label))
+        words.append(0)
+
+    def call(label):
+        fixups.append((len(words), "call", label))
+        words.append(0)
+
+    def jump(label):
+        # An unconditional beq keeps every local transfer position-independent.
+        branch(0x04, ZERO, ZERO, label)
+
+    def la(rt, address):
+        emit(LUI(rt, hi(address)), ADDIU(rt, rt, lo(address)))
+
+    def load(op, rt, address):
+        emit(LUI(AT, hi(address)), op(rt, lo(address), AT), NOP)
+
+    def store(op, rt, address):
+        emit(LUI(AT, hi(address)), op(rt, lo(address), AT))
+
+    # Return v0=1 for the three controls that end the currently visible box.
+    mark("box_boundary")
+    load(LHU, V0, SYMBOL)
+    for value in (WT, PG, ED):
+        emit(ORI(V1, ZERO, value))
+        branch(0x04, V0, V1, "box_boundary_yes")
+        emit(NOP)
+    emit(ADDU(V0, ZERO, ZERO), JR(RA), NOP)
+    mark("box_boundary_yes")
+    emit(ADDIU(V0, ZERO, 1), JR(RA), NOP)
+
+    # Record and consume a new Circle press.  Using the edge-triggered pad word
+    # avoids carrying a held confirm from one box into the next.
+    mark("capture_circle")
+    load(LW, V0, PAD_PRESS)
+    emit(ANDI(V1, V0, CIRCLE))
+    branch(0x04, V1, ZERO, "capture_circle_return")
+    emit(NOP, ADDIU(V1, ZERO, 1))
+    store(SB, V1, INSTANT_TEXT_LATCH)
+    emit(ANDI(V0, V0, 0xffff ^ CIRCLE))
+    store(SW, V0, PAD_PRESS)
+    mark("capture_circle_return")
+    emit(JR(RA), NOP)
+
+    # This is called from the stock story timer's load-delay slot.  Do not
+    # consume confirm while a control handler is already waiting for input.
+    mark("story_capture")
+    load(LBU, T0, STORY_BUSY)
+    branch(0x05, T0, ZERO, "story_capture_reload")
+    emit(NOP)
+    emit(ADDU(T1, RA, ZERO))
+    call("capture_circle")
+    emit(NOP)
+    emit(ADDU(RA, T1, ZERO))
+    # The hook displaced the timer load's delay NOP. capture_circle may clobber
+    # v0/v1, so recreate the values consumed at 0x800544f8/0x800544fc.
+    mark("story_capture_reload")
+    load(LW, V1, TEXT_TIMER)
+    emit(ANDI(V0, V1, 0x7f))
+    emit(JR(RA), NOP)
+
+    # The stock caller writes v0 into TEXT_TIMER after the story render.  Keep
+    # it at zero only while a fast fill is crossing harmless controls.
+    mark("story_timer_value")
+    load(LBU, V0, INSTANT_TEXT_LATCH)
+    branch(0x05, V0, ZERO, "story_timer_zero")
+    emit(NOP)
+    load(LW, V0, TEXT_SPEED)
+    emit(JR(RA), NOP)
+    mark("story_timer_zero")
+    emit(ADDU(V0, ZERO, ZERO), JR(RA), NOP)
+
+    # Story wrapper: the caller has already decoded the current token. Render
+    # it normally, then decode and draw ordinary glyphs until the next control.
+    mark("story_wrapper")
+    emit(ADDIU(SP, SP, -0x20), SW(RA, 0x1c, SP))
+    emit(JAL(STOCK_STORY_RENDER), NOP)
+    call("box_boundary")
+    emit(NOP)
+    branch(0x05, V0, ZERO, "story_clear")
+    emit(NOP)
+    load(LBU, V0, INSTANT_TEXT_LATCH)
+    branch(0x04, V0, ZERO, "story_return")
+    emit(NOP, ADDIU(V0, ZERO, 0x80), SW(V0, 0x10, SP))
+
+    mark("story_loop")
+    load(LW, V0, MESSAGE_PTR)
+    emit(SW(V0, 0x14, SP))
+    load(LBU, V0, NIBBLE_STATE)
+    emit(SW(V0, 0x18, SP))
+    load(LW, A0, MESSAGE_PTR)
+    emit(JAL(STOCK_DECODE), NOP, SW(V0, 0x0c, SP))
+    load(LHU, V1, CONTROL)
+    emit(ORI(T0, ZERO, 0xffff))
+    branch(0x04, V1, T0, "story_peek_clear")
+    emit(NOP, ANDI(T0, V1, 0x4000))
+    branch(0x05, T0, ZERO, "story_peek_special")
+    emit(NOP)
+    emit(LW(V0, 0x0c, SP))
+    store(SW, V0, MESSAGE_PTR)
+    emit(JAL(STOCK_STORY_RENDER), NOP)
+    emit(LW(V0, 0x10, SP), NOP, ADDIU(V0, V0, -1), SW(V0, 0x10, SP))
+    branch(0x05, V0, ZERO, "story_loop")
+    emit(NOP)
+    jump("story_return")
+    emit(NOP)
+
+    mark("story_peek_special")
+    emit(LW(V0, 0x14, SP))
+    store(SW, V0, MESSAGE_PTR)
+    emit(LW(V0, 0x18, SP))
+    store(SB, V0, NIBBLE_STATE)
+    call("box_boundary")
+    emit(NOP)
+    branch(0x05, V0, ZERO, "story_clear")
+    emit(NOP)
+    jump("story_return")
+    emit(NOP)
+
+    mark("story_peek_clear")
+    emit(LW(V0, 0x14, SP))
+    store(SW, V0, MESSAGE_PTR)
+    emit(LW(V0, 0x18, SP))
+    store(SB, V0, NIBBLE_STATE)
+    mark("story_clear")
+    store(SB, ZERO, INSTANT_TEXT_LATCH)
+    mark("story_return")
+    emit(LW(RA, 0x1c, SP), NOP, JR(RA), ADDIU(SP, SP, 0x20))
+
+    # Battle wrapper: one stock step establishes the correct output for any
+    # control/dictionary token.  For an ordinary run, preserve that fragment,
+    # peek/commit more ordinary symbols, and return the combined line fragment.
+    mark("battle_wrapper")
+    emit(ADDIU(SP, SP, -0x30), SW(RA, 0x2c, SP))
+    call("capture_circle")
+    emit(NOP)
+    load(LBU, V0, INSTANT_TEXT_LATCH)
+    branch(0x04, V0, ZERO, "battle_stock")
+    emit(NOP)
+    store(SW, ZERO, TEXT_TIMER)
+    emit(JAL(STOCK_BATTLE_STEP), NOP)
+    load(LBU, V0, BATTLE_STREAM)
+    branch(0x04, V0, ZERO, "battle_clear_return")
+    emit(NOP)
+    load(LHU, V1, CONTROL)
+    emit(ORI(T0, ZERO, 0xffff))
+    branch(0x04, V1, T0, "battle_clear_return")
+    emit(NOP, ANDI(T0, V1, 0x4000))
+    branch(0x05, T0, ZERO, "battle_initial_control")
+    emit(NOP)
+
+    # Copy the stock fragment into the private 256-byte accumulator.
+    la(T0, DRAW_BUFFER)
+    la(T1, INSTANT_TEXT_BUFFER)
+    emit(ADDU(T2, ZERO, ZERO))
+    mark("battle_copy_initial")
+    emit(LBU(T3, 0, T0), NOP, SB(T3, 0, T1))
+    branch(0x04, T3, ZERO, "battle_copy_initial_done")
+    emit(NOP, ADDIU(T0, T0, 1), ADDIU(T1, T1, 1), ADDIU(T2, T2, 1),
+         SLTIU(T4, T2, 0xff))
+    branch(0x05, T4, ZERO, "battle_copy_initial")
+    emit(NOP, SB(ZERO, 0, T1))
+    mark("battle_copy_initial_done")
+    emit(SW(T2, 0x10, SP), ADDIU(V0, ZERO, 0x80), SW(V0, 0x14, SP))
+
+    mark("battle_loop")
+    load(LW, V0, MESSAGE_PTR)
+    emit(SW(V0, 0x18, SP))
+    load(LBU, V0, NIBBLE_STATE)
+    emit(SW(V0, 0x1c, SP))
+    load(LW, A0, MESSAGE_PTR)
+    emit(JAL(STOCK_DECODE), NOP, SW(V0, 0x20, SP))
+    load(LHU, V1, CONTROL)
+    emit(ORI(T0, ZERO, 0xffff))
+    branch(0x04, V1, T0, "battle_peek_clear")
+    emit(NOP, ANDI(T0, V1, 0x4000))
+    branch(0x05, T0, ZERO, "battle_peek_special")
+    emit(NOP, LW(T2, 0x10, SP), NOP, SLTIU(V0, T2, 0xfd))
+    branch(0x04, V0, ZERO, "battle_peek_full")
+    emit(NOP, LW(V0, 0x20, SP), NOP)
+    store(SW, V0, MESSAGE_PTR)
+    load(LHU, V1, SYMBOL)
+    emit(SRL(T3, V1, 8))
+    la(T0, INSTANT_TEXT_BUFFER)
+    emit(ADDU(T0, T0, T2), SB(T3, 0, T0), SB(V1, 1, T0),
+         ADDIU(T2, T2, 2), SW(T2, 0x10, SP), LW(V0, 0x14, SP), NOP,
+         ADDIU(V0, V0, -1), SW(V0, 0x14, SP))
+    branch(0x05, V0, ZERO, "battle_loop")
+    emit(NOP)
+    jump("battle_finalize")
+    emit(NOP)
+
+    mark("battle_peek_special")
+    emit(LW(V0, 0x18, SP))
+    store(SW, V0, MESSAGE_PTR)
+    emit(LW(V0, 0x1c, SP))
+    store(SB, V0, NIBBLE_STATE)
+    call("box_boundary")
+    emit(NOP)
+    branch(0x05, V0, ZERO, "battle_clear_finalize")
+    emit(NOP)
+    jump("battle_finalize")
+    emit(NOP)
+
+    mark("battle_peek_clear")
+    emit(LW(V0, 0x18, SP))
+    store(SW, V0, MESSAGE_PTR)
+    emit(LW(V0, 0x1c, SP))
+    store(SB, V0, NIBBLE_STATE)
+    jump("battle_clear_finalize")
+    emit(NOP)
+
+    mark("battle_peek_full")
+    # The peek was not committed, so a pathologically long line safely resumes
+    # through the normal renderer on the next frame.
+    emit(LW(V0, 0x18, SP))
+    store(SW, V0, MESSAGE_PTR)
+    emit(LW(V0, 0x1c, SP))
+    store(SB, V0, NIBBLE_STATE)
+    jump("battle_finalize")
+    emit(NOP)
+
+    mark("battle_initial_control")
+    call("box_boundary")
+    emit(NOP)
+    branch(0x05, V0, ZERO, "battle_clear_return")
+    emit(NOP)
+    jump("battle_fast_return")
+    emit(NOP)
+
+    mark("battle_clear_finalize")
+    store(SB, ZERO, INSTANT_TEXT_LATCH)
+    mark("battle_finalize")
+    emit(LW(T2, 0x10, SP), NOP)
+    la(T0, INSTANT_TEXT_BUFFER)
+    emit(ADDU(T1, T0, T2), SB(ZERO, 0, T1))
+    la(T1, DRAW_BUFFER)
+    emit(ADDU(T2, ZERO, ZERO))
+    mark("battle_copy_back")
+    emit(LBU(T3, 0, T0), NOP, SB(T3, 0, T1))
+    branch(0x04, T3, ZERO, "battle_fast_return")
+    emit(NOP, ADDIU(T0, T0, 1), ADDIU(T1, T1, 1), ADDIU(T2, T2, 1),
+         SLTIU(T4, T2, INSTANT_TEXT_BUFFER_SIZE))
+    branch(0x05, T4, ZERO, "battle_copy_back")
+    emit(NOP)
+    # Defensive terminator if the private buffer was ever completely full.
+    emit(SB(ZERO, -1, T1))
+    jump("battle_fast_return")
+    emit(NOP)
+
+    mark("battle_clear_return")
+    store(SB, ZERO, INSTANT_TEXT_LATCH)
+    mark("battle_fast_return")
+    store(SW, ZERO, TEXT_TIMER)
+    jump("battle_return")
+    emit(NOP)
+
+    mark("battle_stock")
+    emit(JAL(STOCK_BATTLE_STEP), NOP)
+    mark("battle_return")
+    emit(LW(RA, 0x2c, SP), NOP, JR(RA), ADDIU(SP, SP, 0x30))
+
+    for fixup in fixups:
+        index, kind, *args = fixup
+        if kind == "branch":
+            op, rs, rt, label = args
+            displacement = labels[label] - (index + 1)
+            if not -0x8000 <= displacement <= 0x7fff:
+                raise SystemExit(f"instant-text branch to {label} is out of range")
+            words[index] = RI(op, rs, rt, displacement)
+        elif kind == "call":
+            (label,) = args
+            words[index] = JAL(INSTANT_TEXT_CAVE + labels[label] * 4)
+        elif kind == "jump":
+            (label,) = args
+            target = INSTANT_TEXT_CAVE + labels[label] * 4
+            words[index] = (0x02 << 26) | ((target >> 2) & 0x03ffffff)
+        else:
+            raise AssertionError(kind)
+
+    code_end = INSTANT_TEXT_CAVE + len(words) * 4
+    if code_end > INSTANT_TEXT_CAVE_END:
+        raise SystemExit(
+            f"instant-text code overflow: {code_end:#x}>{INSTANT_TEXT_CAVE_END:#x}"
+        )
+    if INSTANT_TEXT_BUFFER + INSTANT_TEXT_BUFFER_SIZE > 0x800169e8:
+        raise SystemExit("instant-text private buffer exceeds its dead-string span")
+
+    # Only the two intentionally preserved stock targets may remain in the old
+    # map-name block.  Refuse to overwrite a live pointer if relocation changes.
+    live_map_pointers = set()
+    for base, count in ((MN.AREA_TABLE, MN.AREA_COUNT), (MN.MAP_TABLE, MN.MAP_COUNT)):
+        for index in range(count):
+            live_map_pointers.add(struct.unpack_from(
+                "<I", exe, foff(base) + index * 4
+            )[0])
+    reservations = (
+        (INSTANT_TEXT_CAVE, INSTANT_TEXT_CAVE_END),
+        (INSTANT_TEXT_LATCH, INSTANT_TEXT_BUFFER + INSTANT_TEXT_BUFFER_SIZE),
+    )
+    conflicts = sorted(
+        pointer for pointer in live_map_pointers
+        if any(start <= pointer < end for start, end in reservations)
+    )
+    if conflicts:
+        raise SystemExit(
+            "instant-text cave still has live map-name pointers: " +
+            ", ".join(f"{pointer:#x}" for pointer in conflicts)
+        )
+
+    for index, word in enumerate(words):
+        struct.pack_into("<I", exe, foff(INSTANT_TEXT_CAVE) + index * 4, word)
+    scratch_start = foff(INSTANT_TEXT_LATCH)
+    scratch_end = foff(INSTANT_TEXT_BUFFER + INSTANT_TEXT_BUFFER_SIZE)
+    exe[scratch_start:scratch_end] = bytes(scratch_end - scratch_start)
+
+    patches = {
+        # Capture Circle even on a frame spent decrementing the story delay.
+        0x800544f0: (0x00000000, JAL(INSTANT_TEXT_CAVE + labels["story_capture"] * 4)),
+        # Current decoded story token -> render it and complete the ordinary run.
+        0x80054544: (0x0c016044, JAL(INSTANT_TEXT_CAVE + labels["story_wrapper"] * 4)),
+        # Keep inter-control delay at zero only while the current box is filling.
+        0x80054570: (0x8e22c868, JAL(INSTANT_TEXT_CAVE + labels["story_timer_value"] * 4)),
+        # Shared streaming path used by battle and negotiation messages.
+        0x80052b5c: (0x0c0147cf, JAL(INSTANT_TEXT_CAVE + labels["battle_wrapper"] * 4)),
+    }
+    for address, (stock, replacement) in patches.items():
+        offset = foff(address)
+        found = struct.unpack_from("<I", exe, offset)[0]
+        if found != stock:
+            raise SystemExit(
+                f"instant-text hook {address:#x}: {found:#010x} != {stock:#010x}"
+            )
+        struct.pack_into("<I", exe, offset, replacement)
+
+
 def _patch_message_control_literals(exe, w32):
     """Translate Japanese text emitted directly by message-dispatch handlers.
 
@@ -3004,6 +3439,9 @@ def _validate_cave_layouts():
 
     common = [
         ("line-break guard", LINE_BREAK_CAVE, MN.CAVES[0][0]),
+        ("instant-text wrappers", INSTANT_TEXT_CAVE, INSTANT_TEXT_CAVE_END),
+        ("instant-text state", INSTANT_TEXT_LATCH,
+         INSTANT_TEXT_BUFFER + INSTANT_TEXT_BUFFER_SIZE),
         ("VWF hook", 0x800d7254, 0x800d7294),
         ("raw-printer VWF hook", 0x800d7294, OBJ_SCR12),
         ("object-printer scratch", OBJ_SCR12, OBJ_SCR10 + 1),
@@ -3216,6 +3654,7 @@ def main(argv=None):
     map_name_caves = MN.COMPENDIUM_CAVES if enhancements else MN.CAVES
     MN.relocate_map_names(exe, map_name_caves)  # field/location names (save list) -> English, relocated
                                              # to the rodata cave + both pointer tables repointed
+    _patch_instant_text(exe)                 # Circle completes the active story/battle text box
     rdlogo = RD.patch_rdlogo(rdlogo0)        # boot disclaimer -> English (fullwidth, repointed)
     menu_overrides = {COMP.MENU_ENTRY: "Demon Compendium"} if enhancements else None
     MT.rebuild_menu(exe, PATHS, menu_overrides)

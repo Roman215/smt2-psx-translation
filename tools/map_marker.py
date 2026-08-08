@@ -75,12 +75,14 @@ MARKER_LOADS = (0x801E8D70, 0x801E8E3C, 0x801E8F28, 0x801E9004)
 # SJIS names.  0x800162c0..0x800162ec is NOT free: it holds live numeric records
 # (paired counts and signed deltas) and the word 0x801e40f8 -- the 2DMAP overlay's
 # own load address -- reached by computed offsets rather than absolute pointers,
-# so a pointer scan does not see it.  Nothing is claimed below 0x80016300.
+# so a pointer scan does not see it.  Nothing is claimed below 0x80016300.  The
+# helper and its eight-byte table occupy exactly 0x108 bytes; the following
+# orphaned names are reserved by build.py's universal instant-text patch.
 CAVE = 0x80016300
-CAVE_END = 0x800168CC
+CAVE_END = 0x80016408
 # The stock block is left physically in place by relocate_map_names (only the two
 # pointer tables move), so the guard is a pristine-source hash, not a zero check.
-CAVE_SOURCE_SHA256 = "11dc6257b65671474c0a91feeee3b2569a2e3e418ca6a24ca2cae1d8c49c1dcf"
+CAVE_SOURCE_SHA256 = "f531b9b6939cf52e7d05f9fec8905dd2ec5f839e4a83d6168f4ae6aea222eaa5"
 
 ALIGN_BYTE = 0x801FC8D7            # party slot 0 + 0x2f
 LAW_BELOW = 112

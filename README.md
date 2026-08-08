@@ -144,6 +144,10 @@ It touches only `2DMAP.BIN` and a helper in unreferenced executable space, and
 saves are unaffected either way. With `--no-enhancements`, `2DMAP.BIN` is left
 byte-identical to the original.
 
+Regardless of the enhancement profile, pressing **Circle** while story,
+negotiation, or battle text is typing completes the current text box. That
+press is consumed; press Circle again after the box is complete to advance it.
+
 The matching CUE can be copied or renamed to refer to the generated BIN. If
 you create an xdelta for distribution, it must be applied to the same verified
 source image.

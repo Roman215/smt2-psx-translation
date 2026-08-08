@@ -13,6 +13,13 @@ your own verified source image.
 
 ## [Unreleased]
 
+### Added
+
+- Pressing Circle while story, negotiation, or battle text is typing now fills
+  the current text box immediately. The completing press is consumed, so it
+  does not also advance past the finished box. This is translation-wide
+  behavior and is included in both the default and `--no-enhancements` builds.
+
 ## [0.2.2] - 2026-08-02
 
 This patch repairs the Devil Analysis roll that plays after the ending, where
