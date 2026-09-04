@@ -13,6 +13,14 @@ your own verified source image.
 
 ## [Unreleased]
 
+## [0.2.3] - 2026-09-04
+
+This patch fixes a session-wide lockup seeded by Rag's Jewelry, reported on
+GitHub twice: once as every window hanging in Roppongi, once as a demon sort
+menu that reopened forever after dismissing a demon for a new recruit. It also
+clears a stray "se" left under Rag's traded item, and adds a Circle press that
+fills the current text box.
+
 ### Fixed
 
 - Opening any window (menu, quick menu, battle commands, terminals) could hang

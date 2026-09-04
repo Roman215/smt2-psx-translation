@@ -11,3 +11,8 @@ __pycache__/
 build/
 SMT2_full_script.txt
 SMT2_system_strings.txt
+
+# emulator save states and repair-tool output
+*.sav
+*.mp4
+fixed/
