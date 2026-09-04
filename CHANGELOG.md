@@ -21,7 +21,10 @@ your own verified source image.
   address 1, and the party panel then drew that stray English name as the
   "name" of every EMPTY party slot, spilling glyph pixels over the engine's
   current-window pointer. Both stock defects are patched: empty slots draw
-  nothing, and the list is capped at the five rows it can show.
+  nothing, and the list is capped at the five rows it can show. The same
+  corruption also surfaced as an endlessly re-opening demon sort menu after
+  dismissing a demon to make room for a recruit, since every dismissal leaves
+  an EMPTY slot to draw.
   `tools/state_fix.py` repairs an already affected save state.
 
 ### Added
