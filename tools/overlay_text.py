@@ -518,9 +518,29 @@ def patch_omake(source):
     return bytes(buf)
 
 
+# Rag's demon list for a gem is built by the loop at 0x801e4944 (file 0x84c): it
+# copies one demon name per (threshold, demon) pair into the shop's five name slots
+# (pointer table 0x800ee488) and then copies one more after the loop.  For gem rows
+# 1..9 that is SIX names, and the word after the table's fifth entry is 0x00000001,
+# so the sixth name is strcpy'd to RAM address 1.  A stock bug: the katakana name
+# there is short and the list reader 0x80045714 never shows more than five rows.
+# With English names the parked string is what turns the party panel's empty-slot
+# junk draw into a crash (see build._patch_empty_party_plate_guard).  Stop the
+# loop on the slot index instead of the pair offset, so the last copy lands in
+# slot 4 at most.
+RAG_LIST_LOOP_TEST = 0x8a4          # sltiu $v0, $s1, 0x10  (pair offset < 16)
+RAG_LIST_LOOP_TEST_SHA256 = hashlib.sha256(
+    struct.pack("<I", SLTIU(2, 17, 0x10))
+).hexdigest()
+
+
 def patch_rag(source):
-    """Translate Rag's private Earthies material label."""
+    """Translate Rag's private Earthies material label and cap its demon list."""
     buf = bytearray(source)
     # RAG reaches the hooked stock printer through the shop helper at 0x80045714.
     _patch_slot(buf, 0x008, 0x10, "アーシーズ", "Earthies", label="RAG.BIN")
+    _write_code(
+        buf, RAG_LIST_LOOP_TEST, [SLTIU(2, 18, 4)],   # sltiu $v0, $s2, 4
+        RAG_LIST_LOOP_TEST_SHA256, label="RAG.BIN demon list cap",
+    )
     return bytes(buf)

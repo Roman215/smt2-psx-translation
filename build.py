@@ -691,7 +691,36 @@ def build_exe(font_slpm, widths, widths10, slpm):
     _patch_message_control_literals(exe, w32)
     _relocate_bank7_base(exe, w32)
     _relocate_name_buffer(exe, w32)
+    _patch_empty_party_plate_guard(exe, w32)
     return exe
+
+
+# ---- Party panel: empty slots draw a "name" from a NULL pointer ---------------------
+# The six party name plates (objects 0x800eb358 + 0x268*i, 80x10 4bpp surfaces at
+# 0x801cdb58 + 0x198*(i-1) + 8) are refreshed by 0x80019f30, which passes a NULL name
+# for every empty party slot.  The plate routine 0x80047558 guards only on the first
+# byte of the string, so it reads RAM address 0 -- which the engine routinely fills
+# with an event-script pointer -- and the compositor draws whatever bytes follow as
+# glyphs.  Normally that is two junk glyphs hidden under the EMPTY label.  But the
+# Rag's Jewelry list overflow (see overlay_text.patch_rag) parks a demon name at
+# address 1, and an English name such as "Salamander" makes the string 11 glyphs =
+# 110 px.  The compositor never clips x, so the sixth plate's shadow row wraps
+# straight over the globals after its 400-byte buffer, ORing colour-2 pixels into
+# the window-object pointer at 0x801ce380 (0x800ea394 -> 0x802ea3b4).  Every window
+# opened after that jumps into zeroed RAM and hangs (GitHub "Roppongi crash").
+#
+# Test the pointer instead of the byte it points at: a NULL name draws nothing.
+PARTY_PLATE_NAME_TEST = 0x8004757c   # lbu $v0, 0($s1)  ->  move $v0, $s1
+
+
+def _patch_empty_party_plate_guard(exe, w32):
+    at = foff(PARTY_PLATE_NAME_TEST)
+    actual = struct.unpack_from("<I", exe, at)[0]
+    if actual != 0x92220000:
+        raise SystemExit(
+            f"party plate name test {PARTY_PLATE_NAME_TEST:#x}: {actual:#010x} != 0x92220000"
+        )
+    w32(PARTY_PLATE_NAME_TEST, 0x02201021)   # addu $v0, $s1, $zero
 
 
 # ---- Casino minigame prize sprite (Big & Small / Hunter Chance) ------------------------

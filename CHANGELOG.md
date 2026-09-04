@@ -13,6 +13,17 @@ your own verified source image.
 
 ## [Unreleased]
 
+### Fixed
+
+- Opening any window (menu, quick menu, battle commands, terminals) could hang
+  the game for the rest of the session after using Rag's Jewelry in Roppongi.
+  Rag's demon list writes a sixth name past its five slots to RAM
+  address 1, and the party panel then drew that stray English name as the
+  "name" of every EMPTY party slot, spilling glyph pixels over the engine's
+  current-window pointer. Both stock defects are patched: empty slots draw
+  nothing, and the list is capped at the five rows it can show.
+  `tools/state_fix.py` repairs an already affected save state.
+
 ### Added
 
 - Pressing Circle while story, negotiation, or battle text is typing now fills
