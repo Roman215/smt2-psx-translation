@@ -26,6 +26,11 @@ your own verified source image.
   dismissing a demon to make room for a recruit, since every dismissal leaves
   an EMPTY slot to draw.
   `tools/state_fix.py` repairs an already affected save state.
+- Rag's Jewelry showed a stray "se" under the traded item after highlighting the
+  gem for Revive Incense, on every gem thereafter. Shop list names live in
+  24-byte slots sized for katakana, and the 29-byte fullwidth name spilled into
+  the next slot, which the list then drew as a row of its own. The five slots
+  now live in a larger buffer with 48 bytes each.
 
 ### Added
 

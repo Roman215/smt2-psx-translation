@@ -692,6 +692,7 @@ def build_exe(font_slpm, widths, widths10, slpm):
     _relocate_bank7_base(exe, w32)
     _relocate_name_buffer(exe, w32)
     _patch_empty_party_plate_guard(exe, w32)
+    _relocate_shop_name_slots(exe, w32)
     return exe
 
 
@@ -721,6 +722,35 @@ def _patch_empty_party_plate_guard(exe, w32):
             f"party plate name test {PARTY_PLATE_NAME_TEST:#x}: {actual:#010x} != 0x92220000"
         )
     w32(PARTY_PLATE_NAME_TEST, 0x02201021)   # addu $v0, $s1, $zero
+
+
+# ---- Shop list name slots: 24 bytes each, sized for eleven katakana ----------------
+# The shop list window (0x80045714, context 0x800ee43c) draws whatever is in the
+# five name slots reached through the pointer table 0x800ee488: 0x801ce3b8 + 0x18*i.
+# Rag's Jewelry copies the traded item's name into slot 0 with a plain strcpy
+# (0x800d107c).  Fullwidth "Revive Incense" is 29 bytes, so "se" + NUL lands in slot 1
+# and the list draws it as a second row -- and keeps drawing it for every other
+# gem, because the slots are only emptied when the shop opens.  The table's only
+# readers are 0x80045714 and RAG.BIN, and both go through the pointers, so the
+# slots simply move: the stock 256-byte name-insert buffer at 0x801d1458 is free
+# once _relocate_name_buffer has run (its cursor global at 0x801d1558 is untouched),
+# and five 48-byte slots there hold 23 fullwidth characters each.
+SHOP_NAME_SLOT_TABLE = 0x800ee488
+SHOP_NAME_SLOTS_STOCK = 0x801ce3b8
+SHOP_NAME_SLOTS = 0x801d1458
+SHOP_NAME_SLOT_STRIDE = 48
+
+
+def _relocate_shop_name_slots(exe, w32):
+    if SHOP_NAME_SLOTS + 5 * SHOP_NAME_SLOT_STRIDE > 0x801d1558:
+        raise SystemExit("shop name slots overrun the name-insert cursor global")
+    for i in range(5):
+        addr = SHOP_NAME_SLOT_TABLE + 4 * i
+        actual = struct.unpack_from("<I", exe, foff(addr))[0]
+        expect = SHOP_NAME_SLOTS_STOCK + 0x18 * i
+        if actual != expect:
+            raise SystemExit(f"shop name slot {i} at {addr:#x}: {actual:#010x} != {expect:#010x}")
+        w32(addr, SHOP_NAME_SLOTS + SHOP_NAME_SLOT_STRIDE * i)
 
 
 # ---- Casino minigame prize sprite (Big & Small / Hunter Chance) ------------------------

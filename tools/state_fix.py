@@ -62,7 +62,7 @@ PLATE_TEST_FIXED = 0x02201021
 RAG_TEST = 0x801E499C
 RAG_TEST_STOCK = 0x2E220010
 RAG_TEST_FIXED = 0x2E420004
-RAG_TEST_PREV = (0x801E4998, 0x3252FFFF)   # andi $s2, $a1, 0xffff -- overlay identity check
+RAG_TEST_PREV = (0x801E4998, 0x30B2FFFF)   # andi $s2, $a1, 0xffff -- overlay identity check
 
 # Globals under the sixth plate's overflow.  0x801ce350..0x801ce35b are hit by
 # the harmless two-glyph draw in every save; the rest are zero in a healthy
@@ -161,7 +161,10 @@ def repair(ram):
 
     # The parked demon name (RAM address 1..) that the empty plates keep drawing.
     lo, hi = PARKED_NAME
-    if any(ram.blob[ram.base + lo:ram.base + hi]):
+    parked = ram.blob[ram.base + lo:ram.base + hi]
+    # A parked name is fullwidth SJIS (0x81/0x82 lead bytes); the engine's own
+    # stores in low RAM never look like that.
+    if sum(1 for b in parked if b in (0x81, 0x82)) >= 2:
         ram.changes.append(f"parked name at RAM 0x{lo:x}..0x{hi:x} cleared: "
                            f"{bytes(ram.blob[ram.base:ram.base + 0x18]).hex(' ')}")
         ram.blob[ram.base + lo:ram.base + hi] = bytes(hi - lo)
