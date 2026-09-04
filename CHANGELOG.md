@@ -33,6 +33,16 @@ your own verified source image.
   the current text box immediately. The completing press is consumed, so it
   does not also advance past the finished box. This is translation-wide
   behavior and is included in both the default and `--no-enhancements` builds.
+  Edge cases handled since the feature was first written: battle messages
+  keep every glyph of a filled line (they render through the window queue,
+  not the shared draw buffer); a press made while the game is already waiting
+  on a prompt is left for that prompt; negotiation and battle waits count as
+  box boundaries even though their controls share one symbol; in the scenes
+  whose wait polls Circle *held* (fusion and similar), a filled page waits for
+  the button to be released so a single tap cannot skip it unread, and the
+  press that advances such a page does not fill the next one; and a message
+  ended by a script jump, choice menu, or scene change no longer leaves the
+  next conversation starting fully drawn.
 
 ## [0.2.2] - 2026-08-02
 

@@ -902,13 +902,19 @@ def _patch_line_break_guard(exe, w32):
 # ---- Circle-to-complete dialogue -----------------------------------------------------
 # relocate_map_names repoints every live name in the stock 0x80016124..0x80016c6c
 # block except the two deliberately preserved entries at 0x800168cc/0x800168d0.
-# The ranges below stay clear of those entries and hold two small wrappers plus a
-# private accumulation buffer.  Install this patch only *after* relocation.
+# The ranges below stay clear of those entries: the wrappers occupy the dead
+# span below the preserved pair and continue in the span above it, which ends
+# with the private state block just under the "\BIN\TITLE.BIN;1" string at
+# 0x80016c68.  Install this patch only *after* relocation.
 INSTANT_TEXT_CAVE = 0x80016408
 INSTANT_TEXT_CAVE_END = 0x800168cc
-INSTANT_TEXT_LATCH = 0x800168e4
-INSTANT_TEXT_BUFFER = 0x800168e8
+INSTANT_TEXT_CAVE2 = 0x800168e4
+INSTANT_TEXT_CAVE2_END = 0x80016b64
+INSTANT_TEXT_LATCH = 0x80016b64
+INSTANT_TEXT_GUARD = 0x80016b65   # a fill was started by a press that is still held
+INSTANT_TEXT_BUFFER = 0x80016b68
 INSTANT_TEXT_BUFFER_SIZE = 0x100
+INSTANT_TEXT_BLOCK_END = 0x80016c68  # "\BIN\TITLE.BIN;1" lives here
 
 
 def _patch_instant_text(exe):
@@ -921,12 +927,32 @@ def _patch_instant_text(exe):
     token; harmless controls (line breaks and dynamic inserts) run normally on
     the next frame and retain the latch, while WT/PG/ED end the current box and
     clear it.  This prevents the completing Circle press from also advancing.
+
+    Engine facts the wrappers depend on:
+
+    * A/B (negotiation/battle) control leaves all decode to symbol 0x8140, so
+      their box boundaries are recognised by dispatch index (0x0f wait-or-end,
+      0x14 end, 0x66 page clear) rather than by the C/D WT/PG/ED symbols.
+    * In game states 5 and 9 the WT handler blocks inside the decoder and polls
+      the *held* pad word for Circle, so a tap that triggered a fill would still
+      be down when the wait arrives a few frames later and the page would skip
+      unread.  A guard byte defers a boundary token until Circle is released
+      after such a fill.  Elsewhere the wait needs a fresh window confirm.
+    * In battle proper (state 0x10) the streaming step appends each glyph to the
+      window queue and nothing draws the shared draw buffer, so the extra glyphs
+      a fill produces must be appended there as well or they vanish.
+    * A message may end without a rendered WT/PG/ED passing through the wrappers
+      (script jumps, choice menus, scene changes), so the message loader also
+      drops the latch.
     """
     ZERO, AT, V0, V1, A0, A1, T0, T1, T2, T3, T4, SP, RA = (
         0, 1, 2, 3, 4, 5, 8, 9, 10, 11, 12, 29, 31
     )
     NOP = 0
     PAD_PRESS = 0x801277e0
+    PAD_HELD = 0x80123f54         # raw pad-1 state; the word the blocking WT loop polls
+    TABLE_SELECT = 0x801d1450     # 4/5 = A/B tree, otherwise C/D
+    APPEND = 0x80058244
     STORY_BUSY = 0x801d1749
     BATTLE_STREAM = 0x801d1748
     MESSAGE_ACTIVE = 0x801fc370
@@ -943,18 +969,48 @@ def _patch_instant_text(exe):
     STOCK_BATTLE_STEP = 0x80051f3c
     CIRCLE = 0x20                 # Psy-Q PADRright / the game's confirm button
     WT, PG, ED = 0x5754, 0x5047, 0x4544
+    # A/B dispatch indices: 0x0f waits (or ends, by message type), 0x14 ends,
+    # 0x66 is the shared page-clear handler that C/D reaches as PG.
+    AB_WAIT, AB_END, AB_PAGE = 0x0f, 0x14, 0x66
+    BATTLE_MODE = 0x10
 
     # Tie the runtime address to the stock controller updater instead of
     # trusting the similar-looking 0x8011xxxx data range beside it.
     for address, expected in (
         (0x80020fa4, 0x3c038012),  # lui v1,0x8012
         (0x80020fac, 0xac6277e0),  # sw  v0,0x77e0(v1): pad-1 new presses
+        (0x800182e0, 0x26043f54),  # addiu a0,s0,0x3f54: frame service's raw pad-1 word
+        (0x80059934, 0x24100020),  # addiu s0,zero,0x20: WT handler's Circle mask ...
+        (0x8005995c, 0x8e623f54),  # lw v0,0x3f54(s3): ... polled on the raw held word
     ):
         found = struct.unpack_from("<I", exe, foff(address))[0]
         if found != expected:
             raise SystemExit(
                 f"instant-text pad source {address:#x}: "
                 f"{found:#010x} != {expected:#010x}"
+            )
+
+    # Tie the boundary dispatch indices to the handler tables: each table entry
+    # is a stub whose first word is `jal handler`.
+    def dispatch_target(table, index):
+        stub = struct.unpack_from("<I", exe, foff(table) + index * 4)[0]
+        word = struct.unpack_from("<I", exe, foff(stub))[0]
+        if word >> 26 != 0x03:
+            raise SystemExit(f"instant-text dispatch {table:#x}[{index:#x}] is not a jal stub")
+        return 0x80000000 | ((word & 0x03ffffff) << 2)
+
+    for table, index, handler in (
+        (0x8001445c, 0x0f, 0x80084914),  # A/B wait-or-end (calls the WT handler)
+        (0x8001445c, 0x14, 0x80084a8c),  # A/B end (control := 0xffff)
+        (0x8001445c, 0x66, 0x80059aac),  # A/B page clear
+        (0x800132b4, 0x01, 0x80059810),  # C/D WT
+        (0x800132b4, 0x02, 0x80059aac),  # C/D PG (same handler as A/B 0x66)
+    ):
+        found = dispatch_target(table, index)
+        if found != handler:
+            raise SystemExit(
+                f"instant-text dispatch {table:#x}[{index:#x}]: "
+                f"{found:#x} != {handler:#x}"
             )
 
     RI = lambda op, rs, rt, imm: (
@@ -974,6 +1030,7 @@ def _patch_instant_text(exe):
     LBU = lambda rt, off, rs: RI(0x24, rs, rt, off)
     LHU = lambda rt, off, rs: RI(0x25, rs, rt, off)
     SB = lambda rt, off, rs: RI(0x28, rs, rt, off)
+    SH = lambda rt, off, rs: RI(0x29, rs, rt, off)
     SW = lambda rt, off, rs: RI(0x2b, rs, rt, off)
     ADDU = lambda rd, rs, rt: RR(rs, rt, rd, 0, 0x21)
     SLL = lambda rd, rt, sa: RR(ZERO, rt, rd, sa, 0)
@@ -988,11 +1045,16 @@ def _patch_instant_text(exe):
     words = []
     labels = {}
     fixups = []
+    # Every routine marked top-level ends in `jr` + delay slot, so the code may
+    # be cut between two of them and continue in the second dead span.
+    tops = []
 
-    def mark(name):
+    def mark(name, top=False):
         if name in labels:
             raise AssertionError(f"duplicate instant-text label {name}")
         labels[name] = len(words)
+        if top:
+            tops.append(len(words))
 
     def emit(*items):
         words.extend(items)
@@ -1018,50 +1080,193 @@ def _patch_instant_text(exe):
     def store(op, rt, address):
         emit(LUI(AT, hi(address)), op(rt, lo(address), AT))
 
-    # Return v0=1 for the three controls that end the currently visible box.
-    mark("box_boundary")
-    load(LHU, V0, SYMBOL)
+    def load_nn(op, rt, address):
+        # No load-delay NOP: the caller's next instruction must not read rt.
+        emit(LUI(AT, hi(address)), op(rt, lo(address), AT))
+
+    # The decoder's whole state shares one upper half, so it is saved and
+    # restored through t0-t3 with a single lui.  The loads are ordered so every
+    # store sits at least one instruction after its load.
+    if not hi(MESSAGE_PTR) == hi(NIBBLE_STATE) == hi(CONTROL) == hi(SYMBOL):
+        raise AssertionError("decoder state no longer shares an upper half")
+
+    def save_decoder(slot_ptr, slot_nibble, slot_control=None, slot_symbol=None):
+        emit(LUI(AT, hi(MESSAGE_PTR)), LW(T0, lo(MESSAGE_PTR), AT),
+             LBU(T1, lo(NIBBLE_STATE), AT))
+        if slot_control is not None:
+            emit(LHU(T2, lo(CONTROL), AT), LHU(T3, lo(SYMBOL), AT))
+        emit(SW(T0, slot_ptr, SP), SW(T1, slot_nibble, SP))
+        if slot_control is not None:
+            emit(SW(T2, slot_control, SP), SW(T3, slot_symbol, SP))
+
+    def restore_decoder(slot_ptr, slot_nibble, slot_control=None, slot_symbol=None):
+        emit(LW(T0, slot_ptr, SP), LW(T1, slot_nibble, SP))
+        if slot_control is not None:
+            emit(LW(T2, slot_control, SP), LW(T3, slot_symbol, SP))
+        emit(LUI(AT, hi(MESSAGE_PTR)), SW(T0, lo(MESSAGE_PTR), AT),
+             SB(T1, lo(NIBBLE_STATE), AT))
+        if slot_control is not None:
+            emit(SH(T2, lo(CONTROL), AT), SH(T3, lo(SYMBOL), AT))
+
+    # Return v0=1 when the most recently decoded token ends the visible box:
+    # the end-of-message sentinel, an A/B wait/end/page-clear dispatch index,
+    # or a C/D WT/PG/ED symbol.  Literals never qualify.
+    mark("box_boundary", top=True)
+    load_nn(LHU, V0, CONTROL)
+    emit(ORI(V1, ZERO, 0xffff))
+    branch(0x04, V0, V1, "box_boundary_yes")
+    emit(ANDI(T0, V0, 0x4000))
+    branch(0x04, T0, ZERO, "box_boundary_no")
+    emit(NOP)
+    load(LHU, V1, TABLE_SELECT)
+    emit(ADDIU(V1, V1, -4), SLTIU(V1, V1, 2))
+    branch(0x04, V1, ZERO, "box_boundary_cd")
+    emit(ANDI(V0, V0, 0x3fff))
+    for index in (AB_WAIT, AB_END, AB_PAGE):
+        emit(ORI(V1, ZERO, index))
+        branch(0x04, V0, V1, "box_boundary_yes")
+        emit(NOP)
+    jump("box_boundary_no")
+    emit(NOP)
+    mark("box_boundary_cd")
+    load_nn(LHU, V0, SYMBOL)
     for value in (WT, PG, ED):
         emit(ORI(V1, ZERO, value))
         branch(0x04, V0, V1, "box_boundary_yes")
         emit(NOP)
+    mark("box_boundary_no")
     emit(ADDU(V0, ZERO, ZERO), JR(RA), NOP)
     mark("box_boundary_yes")
     emit(ADDIU(V0, ZERO, 1), JR(RA), NOP)
 
     # Record and consume a new Circle press.  Using the edge-triggered pad word
-    # avoids carrying a held confirm from one box into the next.
-    mark("capture_circle")
+    # avoids carrying a held confirm from one box into the next.  The guard
+    # remembers that this hold started a fill.
+    mark("capture_circle", top=True)
     load(LW, V0, PAD_PRESS)
     emit(ANDI(V1, V0, CIRCLE))
     branch(0x04, V1, ZERO, "capture_circle_return")
     emit(NOP, ADDIU(V1, ZERO, 1))
     store(SB, V1, INSTANT_TEXT_LATCH)
+    store(SB, V1, INSTANT_TEXT_GUARD)
     emit(ANDI(V0, V0, 0xffff ^ CIRCLE))
     store(SW, V0, PAD_PRESS)
     mark("capture_circle_return")
     emit(JR(RA), NOP)
 
+    # After a WT that blocked inside the handler (states 5 and 9), the press
+    # that released it is still in the edge word, because that loop polls the
+    # held word and consumes nothing.  Drop it so the next frame's capture does
+    # not turn the advancing press into a fill of the following page.
+    mark("consume_after_wait", top=True)
+    load_nn(LW, V0, GAME_MODE)
+    emit(ADDIU(V1, ZERO, 5))
+    branch(0x04, V0, V1, "consume_check")
+    emit(ADDIU(V1, ZERO, 9))
+    branch(0x05, V0, V1, "consume_return")
+    emit(NOP)
+    mark("consume_check")
+    load(LHU, V0, TABLE_SELECT)
+    emit(ADDIU(V0, V0, -4), SLTIU(V0, V0, 2))
+    branch(0x04, V0, ZERO, "consume_cd")
+    emit(NOP)
+    load(LHU, V0, CONTROL)
+    emit(ANDI(V0, V0, 0x3fff), ORI(V1, ZERO, AB_WAIT))
+    jump("consume_compare")
+    emit(NOP)
+    mark("consume_cd")
+    load_nn(LHU, V0, SYMBOL)
+    emit(ORI(V1, ZERO, WT))
+    mark("consume_compare")
+    branch(0x05, V0, V1, "consume_return")
+    emit(NOP)
+    load(LW, V0, PAD_PRESS)
+    emit(ANDI(V0, V0, 0xffff ^ CIRCLE))
+    store(SW, V0, PAD_PRESS)
+    mark("consume_return")
+    emit(JR(RA), NOP)
+
+    # v0=1 while a fill-starting press is still held in a state whose WT
+    # handler polls the held pad word (5 and 9).  Releasing Circle, or being
+    # in any other state, drops the guard.
+    mark("guard_active", top=True)
+    load(LBU, V0, INSTANT_TEXT_GUARD)
+    branch(0x04, V0, ZERO, "guard_return")
+    emit(NOP)
+    load_nn(LW, V1, GAME_MODE)
+    emit(ADDIU(V0, ZERO, 5))
+    branch(0x04, V1, V0, "guard_check_held")
+    emit(ADDIU(V0, ZERO, 9))
+    branch(0x04, V1, V0, "guard_check_held")
+    emit(NOP)
+    jump("guard_release")
+    emit(NOP)
+    mark("guard_check_held")
+    load(LW, V0, PAD_HELD)
+    emit(ANDI(V0, V0, CIRCLE))
+    branch(0x05, V0, ZERO, "guard_return_held")
+    emit(NOP)
+    mark("guard_release")
+    store(SB, ZERO, INSTANT_TEXT_GUARD)
+    emit(ADDU(V0, ZERO, ZERO))
+    mark("guard_return")
+    emit(JR(RA), NOP)
+    mark("guard_return_held")
+    emit(ADDIU(V0, ZERO, 1), JR(RA), NOP)
+
+    # Decode the next token without side effects and report whether it is a
+    # box boundary.  The decoder's whole state is the cursor, the nibble phase
+    # and the control/symbol pair; all four are restored.
+    mark("peek_boundary", top=True)
+    emit(ADDIU(SP, SP, -0x28), SW(RA, 0x24, SP))
+    save_decoder(0x10, 0x14, 0x18, 0x1c)
+    emit(JAL(STOCK_DECODE), ADDU(A0, T0, ZERO))
+    call("box_boundary")
+    emit(NOP, SW(V0, 0x20, SP))
+    restore_decoder(0x10, 0x14, 0x18, 0x1c)
+    emit(LW(V0, 0x20, SP), LW(RA, 0x24, SP), NOP, JR(RA), ADDIU(SP, SP, 0x28))
+
+    # Hooked into the message loader's prologue (after ra is saved): every new
+    # message starts with the latch down, whatever ended the previous one.
+    mark("message_start", top=True)
+    emit(SW(22, 0x28, SP))               # the displaced `sw s6, 0x28(sp)`
+    store(SB, ZERO, INSTANT_TEXT_LATCH)
+    emit(JR(RA), NOP)
+
     # This is called from the stock story timer's load-delay slot.  Do not
     # consume confirm while a control handler is already waiting for input.
-    mark("story_capture")
+    # While the guard holds and the next token is a boundary, report a one
+    # frame delay instead so the stock flow neither decodes nor renders it.
+    mark("story_capture", top=True)
+    emit(ADDIU(SP, SP, -0x18), SW(RA, 0x14, SP))
     load(LBU, T0, STORY_BUSY)
     branch(0x05, T0, ZERO, "story_capture_reload")
     emit(NOP)
-    emit(ADDU(T1, RA, ZERO))
     call("capture_circle")
     emit(NOP)
-    emit(ADDU(RA, T1, ZERO))
-    # The hook displaced the timer load's delay NOP. capture_circle may clobber
+    call("guard_active")
+    emit(NOP)
+    branch(0x04, V0, ZERO, "story_capture_reload")
+    emit(NOP)
+    call("peek_boundary")
+    emit(NOP)
+    branch(0x04, V0, ZERO, "story_capture_reload")
+    emit(NOP)
+    # v0>0 takes the countdown branch at 0x800544f8, whose delay slot stores
+    # v1-1 back into the timer: a one-frame hold that re-evaluates next frame.
+    emit(LW(RA, 0x14, SP), ADDIU(V1, ZERO, 1), ADDIU(V0, ZERO, 1))
+    emit(JR(RA), ADDIU(SP, SP, 0x18))
+    # The hook displaced the timer load's delay NOP. The calls above clobber
     # v0/v1, so recreate the values consumed at 0x800544f8/0x800544fc.
     mark("story_capture_reload")
+    emit(LW(RA, 0x14, SP))
     load(LW, V1, TEXT_TIMER)
     emit(ANDI(V0, V1, 0x7f))
-    emit(JR(RA), NOP)
+    emit(JR(RA), ADDIU(SP, SP, 0x18))
 
     # The stock caller writes v0 into TEXT_TIMER after the story render.  Keep
     # it at zero only while a fast fill is crossing harmless controls.
-    mark("story_timer_value")
+    mark("story_timer_value", top=True)
     load(LBU, V0, INSTANT_TEXT_LATCH)
     branch(0x05, V0, ZERO, "story_timer_zero")
     emit(NOP)
@@ -1072,25 +1277,21 @@ def _patch_instant_text(exe):
 
     # Story wrapper: the caller has already decoded the current token. Render
     # it normally, then decode and draw ordinary glyphs until the next control.
-    mark("story_wrapper")
+    mark("story_wrapper", top=True)
     emit(ADDIU(SP, SP, -0x20), SW(RA, 0x1c, SP))
     emit(JAL(STOCK_STORY_RENDER), NOP)
     call("box_boundary")
     emit(NOP)
-    branch(0x05, V0, ZERO, "story_clear")
+    branch(0x05, V0, ZERO, "story_boundary")
     emit(NOP)
     load(LBU, V0, INSTANT_TEXT_LATCH)
     branch(0x04, V0, ZERO, "story_return")
     emit(NOP, ADDIU(V0, ZERO, 0x80), SW(V0, 0x10, SP))
 
     mark("story_loop")
-    load(LW, V0, MESSAGE_PTR)
-    emit(SW(V0, 0x14, SP))
-    load(LBU, V0, NIBBLE_STATE)
-    emit(SW(V0, 0x18, SP))
-    load(LW, A0, MESSAGE_PTR)
-    emit(JAL(STOCK_DECODE), NOP, SW(V0, 0x0c, SP))
-    load(LHU, V1, CONTROL)
+    save_decoder(0x14, 0x18)
+    emit(JAL(STOCK_DECODE), ADDU(A0, T0, ZERO), SW(V0, 0x0c, SP))
+    load_nn(LHU, V1, CONTROL)
     emit(ORI(T0, ZERO, 0xffff))
     branch(0x04, V1, T0, "story_peek_clear")
     emit(NOP, ANDI(T0, V1, 0x4000))
@@ -1106,10 +1307,7 @@ def _patch_instant_text(exe):
     emit(NOP)
 
     mark("story_peek_special")
-    emit(LW(V0, 0x14, SP))
-    store(SW, V0, MESSAGE_PTR)
-    emit(LW(V0, 0x18, SP))
-    store(SB, V0, NIBBLE_STATE)
+    restore_decoder(0x14, 0x18)
     call("box_boundary")
     emit(NOP)
     branch(0x05, V0, ZERO, "story_clear")
@@ -1117,11 +1315,16 @@ def _patch_instant_text(exe):
     jump("story_return")
     emit(NOP)
 
+    # The token just rendered ended the box (and, in states 5/9, blocked on
+    # the player): drop the latch and the press that released the wait.
+    mark("story_boundary")
+    call("consume_after_wait")
+    emit(NOP)
+    jump("story_clear")
+    emit(NOP)
+
     mark("story_peek_clear")
-    emit(LW(V0, 0x14, SP))
-    store(SW, V0, MESSAGE_PTR)
-    emit(LW(V0, 0x18, SP))
-    store(SB, V0, NIBBLE_STATE)
+    restore_decoder(0x14, 0x18)
     mark("story_clear")
     store(SB, ZERO, INSTANT_TEXT_LATCH)
     mark("story_return")
@@ -1130,10 +1333,26 @@ def _patch_instant_text(exe):
     # Battle wrapper: one stock step establishes the correct output for any
     # control/dictionary token.  For an ordinary run, preserve that fragment,
     # peek/commit more ordinary symbols, and return the combined line fragment.
-    mark("battle_wrapper")
+    mark("battle_wrapper", top=True)
     emit(ADDIU(SP, SP, -0x30), SW(RA, 0x2c, SP))
+    # While a handler waits on the player, the press belongs to the wait (the
+    # window confirm reads the same edge word), so run the stock step untouched.
+    load(LBU, V0, STORY_BUSY)
+    branch(0x05, V0, ZERO, "battle_stock")
+    emit(NOP)
     call("capture_circle")
     emit(NOP)
+    call("guard_active")
+    emit(NOP)
+    branch(0x04, V0, ZERO, "battle_go")
+    emit(NOP)
+    call("peek_boundary")
+    emit(NOP)
+    # A held Circle would sail straight through the blocking WT: leave the
+    # boundary token undecoded until the button is released.
+    branch(0x05, V0, ZERO, "battle_return")
+    emit(NOP)
+    mark("battle_go")
     load(LBU, V0, INSTANT_TEXT_LATCH)
     branch(0x04, V0, ZERO, "battle_stock")
     emit(NOP)
@@ -1142,7 +1361,7 @@ def _patch_instant_text(exe):
     load(LBU, V0, BATTLE_STREAM)
     branch(0x04, V0, ZERO, "battle_clear_return")
     emit(NOP)
-    load(LHU, V1, CONTROL)
+    load_nn(LHU, V1, CONTROL)
     emit(ORI(T0, ZERO, 0xffff))
     branch(0x04, V1, T0, "battle_clear_return")
     emit(NOP, ANDI(T0, V1, 0x4000))
@@ -1161,16 +1380,13 @@ def _patch_instant_text(exe):
     branch(0x05, T4, ZERO, "battle_copy_initial")
     emit(NOP, SB(ZERO, 0, T1))
     mark("battle_copy_initial_done")
-    emit(SW(T2, 0x10, SP), ADDIU(V0, ZERO, 0x80), SW(V0, 0x14, SP))
+    emit(SW(T2, 0x10, SP), SW(T2, 0x24, SP), ADDIU(V0, ZERO, 0x80),
+         SW(V0, 0x14, SP))
 
     mark("battle_loop")
-    load(LW, V0, MESSAGE_PTR)
-    emit(SW(V0, 0x18, SP))
-    load(LBU, V0, NIBBLE_STATE)
-    emit(SW(V0, 0x1c, SP))
-    load(LW, A0, MESSAGE_PTR)
-    emit(JAL(STOCK_DECODE), NOP, SW(V0, 0x20, SP))
-    load(LHU, V1, CONTROL)
+    save_decoder(0x18, 0x1c)
+    emit(JAL(STOCK_DECODE), ADDU(A0, T0, ZERO), SW(V0, 0x20, SP))
+    load_nn(LHU, V1, CONTROL)
     emit(ORI(T0, ZERO, 0xffff))
     branch(0x04, V1, T0, "battle_peek_clear")
     emit(NOP, ANDI(T0, V1, 0x4000))
@@ -1191,10 +1407,7 @@ def _patch_instant_text(exe):
     emit(NOP)
 
     mark("battle_peek_special")
-    emit(LW(V0, 0x18, SP))
-    store(SW, V0, MESSAGE_PTR)
-    emit(LW(V0, 0x1c, SP))
-    store(SB, V0, NIBBLE_STATE)
+    restore_decoder(0x18, 0x1c)
     call("box_boundary")
     emit(NOP)
     branch(0x05, V0, ZERO, "battle_clear_finalize")
@@ -1203,27 +1416,21 @@ def _patch_instant_text(exe):
     emit(NOP)
 
     mark("battle_peek_clear")
-    emit(LW(V0, 0x18, SP))
-    store(SW, V0, MESSAGE_PTR)
-    emit(LW(V0, 0x1c, SP))
-    store(SB, V0, NIBBLE_STATE)
+    restore_decoder(0x18, 0x1c)
     jump("battle_clear_finalize")
     emit(NOP)
 
     mark("battle_peek_full")
     # The peek was not committed, so a pathologically long line safely resumes
     # through the normal renderer on the next frame.
-    emit(LW(V0, 0x18, SP))
-    store(SW, V0, MESSAGE_PTR)
-    emit(LW(V0, 0x1c, SP))
-    store(SB, V0, NIBBLE_STATE)
+    restore_decoder(0x18, 0x1c)
     jump("battle_finalize")
     emit(NOP)
 
     mark("battle_initial_control")
     call("box_boundary")
     emit(NOP)
-    branch(0x05, V0, ZERO, "battle_clear_return")
+    branch(0x05, V0, ZERO, "battle_boundary_return")
     emit(NOP)
     jump("battle_fast_return")
     emit(NOP)
@@ -1234,6 +1441,19 @@ def _patch_instant_text(exe):
     emit(LW(T2, 0x10, SP), NOP)
     la(T0, INSTANT_TEXT_BUFFER)
     emit(ADDU(T1, T0, T2), SB(ZERO, 0, T1))
+    # Battle proper renders through the window queue, not the draw buffer: the
+    # stock step already appended the first fragment, so append only the
+    # glyphs the fill added after it.
+    load(LW, V0, GAME_MODE)
+    emit(ORI(V1, ZERO, BATTLE_MODE))
+    branch(0x05, V0, V1, "battle_copy_back_setup")
+    emit(NOP, LW(V1, 0x24, SP), NOP)
+    branch(0x04, V1, T2, "battle_copy_back_setup")
+    emit(NOP)
+    la(A0, INSTANT_TEXT_BUFFER)
+    emit(ADDU(A0, A0, V1), JAL(APPEND), NOP)
+    mark("battle_copy_back_setup")
+    la(T0, INSTANT_TEXT_BUFFER)
     la(T1, DRAW_BUFFER)
     emit(ADDU(T2, ZERO, ZERO))
     mark("battle_copy_back")
@@ -1248,6 +1468,11 @@ def _patch_instant_text(exe):
     jump("battle_fast_return")
     emit(NOP)
 
+    # The stock step just ran a box-ending control (a blocking WT in states
+    # 5/9): drop the press that released it along with the latch.
+    mark("battle_boundary_return")
+    call("consume_after_wait")
+    emit(NOP)
     mark("battle_clear_return")
     store(SB, ZERO, INSTANT_TEXT_LATCH)
     mark("battle_fast_return")
@@ -1260,31 +1485,57 @@ def _patch_instant_text(exe):
     mark("battle_return")
     emit(LW(RA, 0x2c, SP), NOP, JR(RA), ADDIU(SP, SP, 0x30))
 
+    # Lay the routines out across the two dead spans.  Every transfer between
+    # routines goes through a label, so each one is placed independently
+    # (largest first) wherever it fits.
+    bounds = tops + [len(words)]
+    routines = [(bounds[i], bounds[i + 1]) for i in range(len(tops))]
+    for start, _end in routines[1:]:
+        # Routines must not fall through into their successor: the second to
+        # last word of the predecessor is its `jr`.
+        if words[start - 2] & 0xfc00003f != 0x00000008:
+            raise AssertionError(f"instant-text routine before {start} does not end in jr")
+    cursors = [
+        [INSTANT_TEXT_CAVE, INSTANT_TEXT_CAVE_END],
+        [INSTANT_TEXT_CAVE2, INSTANT_TEXT_CAVE2_END],
+    ]
+    word_address = [None] * len(words)
+    for start, end in sorted(routines, key=lambda r: r[0] - r[1]):
+        size = (end - start) * 4
+        for cursor in cursors:
+            if cursor[0] + size <= cursor[1]:
+                for index in range(start, end):
+                    word_address[index] = cursor[0] + (index - start) * 4
+                cursor[0] += size
+                break
+        else:
+            raise SystemExit(
+                f"instant-text code overflow: {len(words)} words across "
+                f"{(INSTANT_TEXT_CAVE_END - INSTANT_TEXT_CAVE) // 4}+"
+                f"{(INSTANT_TEXT_CAVE2_END - INSTANT_TEXT_CAVE2) // 4} available"
+            )
+
+    def address(index):
+        return word_address[index]
+
     for fixup in fixups:
         index, kind, *args = fixup
         if kind == "branch":
             op, rs, rt, label = args
-            displacement = labels[label] - (index + 1)
+            displacement = (address(labels[label]) - (address(index) + 4)) // 4
             if not -0x8000 <= displacement <= 0x7fff:
                 raise SystemExit(f"instant-text branch to {label} is out of range")
             words[index] = RI(op, rs, rt, displacement)
         elif kind == "call":
             (label,) = args
-            words[index] = JAL(INSTANT_TEXT_CAVE + labels[label] * 4)
-        elif kind == "jump":
-            (label,) = args
-            target = INSTANT_TEXT_CAVE + labels[label] * 4
-            words[index] = (0x02 << 26) | ((target >> 2) & 0x03ffffff)
+            words[index] = JAL(address(labels[label]))
         else:
             raise AssertionError(kind)
 
-    code_end = INSTANT_TEXT_CAVE + len(words) * 4
-    if code_end > INSTANT_TEXT_CAVE_END:
-        raise SystemExit(
-            f"instant-text code overflow: {code_end:#x}>{INSTANT_TEXT_CAVE_END:#x}"
-        )
-    if INSTANT_TEXT_BUFFER + INSTANT_TEXT_BUFFER_SIZE > 0x800169e8:
-        raise SystemExit("instant-text private buffer exceeds its dead-string span")
+    if INSTANT_TEXT_BUFFER + INSTANT_TEXT_BUFFER_SIZE > INSTANT_TEXT_BLOCK_END:
+        raise SystemExit("instant-text private state exceeds its dead-string span")
+    if INSTANT_TEXT_CAVE2_END > INSTANT_TEXT_LATCH:
+        raise SystemExit("instant-text continuation span overlaps its state block")
 
     # Only the two intentionally preserved stock targets may remain in the old
     # map-name block.  Refuse to overwrite a live pointer if relocation changes.
@@ -1296,6 +1547,7 @@ def _patch_instant_text(exe):
             )[0])
     reservations = (
         (INSTANT_TEXT_CAVE, INSTANT_TEXT_CAVE_END),
+        (INSTANT_TEXT_CAVE2, INSTANT_TEXT_CAVE2_END),
         (INSTANT_TEXT_LATCH, INSTANT_TEXT_BUFFER + INSTANT_TEXT_BUFFER_SIZE),
     )
     conflicts = sorted(
@@ -1309,20 +1561,22 @@ def _patch_instant_text(exe):
         )
 
     for index, word in enumerate(words):
-        struct.pack_into("<I", exe, foff(INSTANT_TEXT_CAVE) + index * 4, word)
+        struct.pack_into("<I", exe, foff(address(index)), word)
     scratch_start = foff(INSTANT_TEXT_LATCH)
     scratch_end = foff(INSTANT_TEXT_BUFFER + INSTANT_TEXT_BUFFER_SIZE)
     exe[scratch_start:scratch_end] = bytes(scratch_end - scratch_start)
 
     patches = {
         # Capture Circle even on a frame spent decrementing the story delay.
-        0x800544f0: (0x00000000, JAL(INSTANT_TEXT_CAVE + labels["story_capture"] * 4)),
+        0x800544f0: (0x00000000, JAL(address(labels["story_capture"]))),
         # Current decoded story token -> render it and complete the ordinary run.
-        0x80054544: (0x0c016044, JAL(INSTANT_TEXT_CAVE + labels["story_wrapper"] * 4)),
+        0x80054544: (0x0c016044, JAL(address(labels["story_wrapper"]))),
         # Keep inter-control delay at zero only while the current box is filling.
-        0x80054570: (0x8e22c868, JAL(INSTANT_TEXT_CAVE + labels["story_timer_value"] * 4)),
+        0x80054570: (0x8e22c868, JAL(address(labels["story_timer_value"]))),
         # Shared streaming path used by battle and negotiation messages.
-        0x80052b5c: (0x0c0147cf, JAL(INSTANT_TEXT_CAVE + labels["battle_wrapper"] * 4)),
+        0x80052b5c: (0x0c0147cf, JAL(address(labels["battle_wrapper"]))),
+        # Message loader prologue (ra already saved): a new message drops the latch.
+        0x80056a3c: (0xafb60028, JAL(address(labels["message_start"]))),
     }
     for address, (stock, replacement) in patches.items():
         offset = foff(address)
@@ -3469,6 +3723,8 @@ def _validate_cave_layouts():
     common = [
         ("line-break guard", LINE_BREAK_CAVE, MN.CAVES[0][0]),
         ("instant-text wrappers", INSTANT_TEXT_CAVE, INSTANT_TEXT_CAVE_END),
+        ("instant-text wrappers (continued)", INSTANT_TEXT_CAVE2,
+         INSTANT_TEXT_CAVE2_END),
         ("instant-text state", INSTANT_TEXT_LATCH,
          INSTANT_TEXT_BUFFER + INSTANT_TEXT_BUFFER_SIZE),
         ("VWF hook", 0x800d7254, 0x800d7294),
